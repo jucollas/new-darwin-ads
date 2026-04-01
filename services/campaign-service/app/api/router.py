@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.auth.jwt_middleware import get_current_user
@@ -147,6 +147,28 @@ async def select_proposal(
     )
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign or proposal not found")
+
+    # Get selected proposal to extract image_prompt
+    proposals = await service.get_proposals(_parse_uuid(campaign_id), current_user["user_id"])
+    selected = next((p for p in proposals if str(p.id) == proposal_id), None)
+
+    if selected and selected.image_url:
+        # Already has an image — skip generation
+        await service.update_status(campaign_id, "image_ready")
+    elif selected:
+        # Dispatch image generation task
+        from shared.celery_app.config import celery_app
+        celery_app.send_task(
+            "tasks.image_generate",
+            queue="image_tasks",
+            args=[
+                str(campaign.id),
+                proposal_id,
+                selected.image_prompt,
+                "1:1",
+            ],
+        )
+
     return campaign
 
 
@@ -187,3 +209,60 @@ async def resume_campaign(
     if not campaign:
         raise HTTPException(status_code=400, detail="Campaign cannot be resumed")
     return campaign
+
+
+# ---------------------------------------------------------------------------
+# Internal endpoints — called by other services, NO JWT required
+# ---------------------------------------------------------------------------
+
+
+@router.post("/internal/{campaign_id}/store-proposals", include_in_schema=False)
+async def store_proposals_internal(
+    campaign_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint called by ai-generation-service Celery task."""
+    data = await request.json()
+    service = CampaignService(db)
+    campaign = await service.get_by_id_internal(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    await service.delete_proposals(campaign_id)
+    for proposal_data in data["proposals"]:
+        await service.create_proposal(campaign_id, proposal_data)
+    await service.update_status(campaign_id, "proposals_ready")
+
+    return {"status": "ok", "proposals_stored": len(data["proposals"])}
+
+
+@router.put("/internal/{campaign_id}/proposals/{proposal_id}/image", include_in_schema=False)
+async def update_proposal_image_internal(
+    campaign_id: str,
+    proposal_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint called by image-generation-service to set image_url on a proposal."""
+    data = await request.json()
+    service = CampaignService(db)
+    updated = await service.update_proposal_image(
+        campaign_id, proposal_id, data["image_url"], data.get("storage_path"),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return {"status": "ok"}
+
+
+@router.put("/internal/{campaign_id}/status", include_in_schema=False)
+async def update_status_internal(
+    campaign_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint to update campaign status from other services."""
+    data = await request.json()
+    service = CampaignService(db)
+    await service.update_status(campaign_id, data["status"])
+    return {"status": "ok"}

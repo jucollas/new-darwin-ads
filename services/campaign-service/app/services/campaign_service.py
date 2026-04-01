@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,36 +13,6 @@ VALID_STATUSES = {
     "draft", "generating", "proposals_ready", "image_generating",
     "image_ready", "publishing", "published", "paused", "failed", "archived",
 }
-
-
-def _generate_mock_proposals(campaign: Campaign) -> list[dict]:
-    base_prompt = campaign.user_prompt
-    return [
-        {
-            "copy_text": f"Propuesta 1: \u00a1Descubre lo mejor! {base_prompt[:80]}... Escr\u00edbenos por WhatsApp y recibe asesor\u00eda personalizada.",
-            "script": f"Escena 1: Mostrar producto/servicio relacionado con: {base_prompt[:60]}.\nEscena 2: Cliente satisfecho.\nEscena 3: Call to action - WhatsApp.",
-            "image_prompt": f"Professional advertising photo, modern and clean design, related to: {base_prompt[:60]}, vibrant colors, white background, commercial photography style",
-            "target_audience": {"age_min": 25, "age_max": 45, "genders": ["male", "female"], "interests": ["shopping", "lifestyle"], "locations": ["CO"]},
-            "cta_type": "whatsapp_chat",
-            "whatsapp_number": None,
-        },
-        {
-            "copy_text": f"Propuesta 2: \u00bfBuscas {base_prompt[:50]}? Tenemos la soluci\u00f3n perfecta para ti. \u00a1Chatea con nosotros ahora!",
-            "script": f"Escena 1: Problema del cliente.\nEscena 2: Soluci\u00f3n con {base_prompt[:40]}.\nEscena 3: Testimonial.\nEscena 4: WhatsApp CTA.",
-            "image_prompt": f"Eye-catching social media ad, bold typography, product showcase related to: {base_prompt[:60]}, professional lighting, Instagram-ready",
-            "target_audience": {"age_min": 18, "age_max": 35, "genders": ["female"], "interests": ["fashion", "beauty", "wellness"], "locations": ["CO"]},
-            "cta_type": "whatsapp_chat",
-            "whatsapp_number": None,
-        },
-        {
-            "copy_text": f"Propuesta 3: Oferta exclusiva - {base_prompt[:50]}. Solo por tiempo limitado. \u00a1No te lo pierdas! Escr\u00edbenos ya.",
-            "script": f"Escena 1: Urgencia - oferta limitada.\nEscena 2: Producto destacado: {base_prompt[:40]}.\nEscena 3: Precio/descuento.\nEscena 4: Bot\u00f3n WhatsApp.",
-            "image_prompt": f"Sale promotion banner, urgency design, countdown timer aesthetic, related to: {base_prompt[:60]}, red and yellow accents, commercial",
-            "target_audience": {"age_min": 20, "age_max": 50, "genders": ["male", "female"], "interests": ["deals", "promotions", "online shopping"], "locations": ["CO", "MX"]},
-            "cta_type": "whatsapp_chat",
-            "whatsapp_number": None,
-        },
-    ]
 
 
 class CampaignService:
@@ -60,6 +31,12 @@ class CampaignService:
             .options(selectinload(Campaign.proposals))
             .where(Campaign.id == campaign_id, Campaign.user_id == user_id)
         )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_id_internal(self, campaign_id: str) -> Campaign | None:
+        """Get campaign without user_id check (for internal service calls)."""
+        stmt = select(Campaign).where(Campaign.id == uuid.UUID(campaign_id))
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -112,10 +89,13 @@ class CampaignService:
         return True
 
     async def generate_proposals(self, campaign_id: uuid.UUID, user_id: str) -> Campaign | None:
+        """Dispatch AI proposal generation (sync or async based on config)."""
+        from app.config import settings
+
         campaign = await self.get_by_id(campaign_id, user_id)
         if not campaign:
             return None
-        if campaign.status not in ("draft", "proposals_ready"):
+        if campaign.status not in ("draft", "proposals_ready", "failed"):
             return None
 
         # Remove existing proposals
@@ -124,21 +104,96 @@ class CampaignService:
         await self.db.flush()
 
         campaign.status = "generating"
-        await self.db.flush()
-
-        # Create mock proposals
-        mock_data = _generate_mock_proposals(campaign)
-        for data in mock_data:
-            proposal = Proposal(campaign_id=campaign.id, **data)
-            self.db.add(proposal)
-
-        campaign.status = "proposals_ready"
         campaign.selected_proposal_id = None
         await self.db.flush()
 
-        # Reload proposals
+        if settings.USE_SYNC_AI:
+            # Synchronous mode — call ai-generation-service directly
+            import httpx
+
+            try:
+                async with httpx.AsyncClient(timeout=90.0) as client:
+                    response = await client.post(
+                        f"{settings.AI_SERVICE_URL}/api/v1/ai/generate/proposals",
+                        json={
+                            "user_prompt": campaign.user_prompt,
+                            "business_context": {},
+                        },
+                    )
+                    response.raise_for_status()
+                    proposals_data = response.json()["proposals"]
+
+                # Store proposals directly
+                await self.delete_proposals(str(campaign.id))
+                for p in proposals_data:
+                    await self.create_proposal(str(campaign.id), p)
+                await self.update_status(str(campaign.id), "proposals_ready")
+
+            except Exception as e:
+                await self.update_status(str(campaign.id), "failed")
+                await self.db.flush()
+                await self.db.refresh(campaign)
+                return campaign
+        else:
+            # Async mode — dispatch Celery task
+            from shared.celery_app.config import celery_app
+            celery_app.send_task(
+                "tasks.ai_generate_proposals",
+                queue="ai_tasks",
+                args=[str(campaign.id), campaign.user_prompt, {}],
+            )
+
+        await self.db.flush()
         await self.db.refresh(campaign)
         return campaign
+
+    async def delete_proposals(self, campaign_id: str) -> None:
+        """Delete all proposals for a campaign (for regeneration)."""
+        stmt = delete(Proposal).where(Proposal.campaign_id == uuid.UUID(campaign_id))
+        await self.db.execute(stmt)
+
+    async def create_proposal(self, campaign_id: str, data: dict) -> Proposal:
+        """Create a proposal from AI-generated data."""
+        proposal = Proposal(
+            campaign_id=uuid.UUID(campaign_id),
+            copy_text=data["copy_text"],
+            script=data["script"],
+            image_prompt=data["image_prompt"],
+            target_audience=data["target_audience"],
+            cta_type=data.get("cta_type", "whatsapp_chat"),
+            whatsapp_number=data.get("whatsapp_number"),
+        )
+        self.db.add(proposal)
+        await self.db.flush()
+        return proposal
+
+    async def update_proposal_image(
+        self,
+        campaign_id: str,
+        proposal_id: str,
+        image_url: str,
+        storage_path: str | None = None,
+    ) -> bool:
+        """Update a proposal's image_url (called by image-generation-service)."""
+        stmt = (
+            update(Proposal)
+            .where(
+                Proposal.campaign_id == uuid.UUID(campaign_id),
+                Proposal.id == uuid.UUID(proposal_id),
+            )
+            .values(image_url=image_url)
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount > 0
+
+    async def update_status(self, campaign_id: str, status: str) -> None:
+        """Update campaign status."""
+        stmt = (
+            update(Campaign)
+            .where(Campaign.id == uuid.UUID(campaign_id))
+            .values(status=status, updated_at=datetime.utcnow())
+        )
+        await self.db.execute(stmt)
 
     async def get_proposals(self, campaign_id: uuid.UUID, user_id: str) -> list[Proposal]:
         campaign = await self.get_by_id(campaign_id, user_id)

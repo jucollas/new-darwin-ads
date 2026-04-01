@@ -102,6 +102,10 @@ services:
       context: .
       dockerfile: services/image-generation-service/Dockerfile
     env_file: .env
+    volumes:
+      - ./credentials/gcp-key.json:/app/credentials/gcp-key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.images.rule=PathPrefix(`/api/v1/images`)"
@@ -109,8 +113,6 @@ services:
       - "traefik.http.routers.images.priority=100"
       - "traefik.http.services.images.loadbalancer.server.port=8003"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -193,6 +195,39 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  celery-ai-worker:
+    build:
+      context: .
+      dockerfile: services/ai-generation-service/Dockerfile
+    env_file: .env
+    command: ["celery", "-A", "worker:celery_app", "worker", "--loglevel=info", "-Q", "ai_tasks", "-c", "2"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      ai-generation-service:
+        condition: service_started
+      campaign-service:
+        condition: service_started
+
+  image-worker:
+    build:
+      context: .
+      dockerfile: services/image-generation-service/Dockerfile
+    env_file: .env
+    command: ["celery", "-A", "worker:celery_app", "worker", "--loglevel=info", "-Q", "image_tasks", "-c", "1"]
+    volumes:
+      - ./credentials/gcp-key.json:/app/credentials/gcp-key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
+    depends_on:
+      redis:
+        condition: service_healthy
+      image-generation-service:
+        condition: service_started
+      campaign-service:
+        condition: service_started
+    restart: unless-stopped
 
 volumes:
   postgres_data:

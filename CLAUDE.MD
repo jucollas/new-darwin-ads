@@ -879,11 +879,11 @@ Infrastructure: Docker Compose, Traefik, PostgreSQL schemas, Redis, shared modul
 ### FASE 1 — Campaign Service [COMPLETED]
 CRUD for campaigns and proposals. Dev auth service for development. Frontend integration.
 
-### FASE 2 — AI Generation Service [NOT STARTED]
-GPT integration for proposal generation.
+### FASE 2 — AI Generation Service [COMPLETED]
+GPT integration for proposal generation. Real OpenAI GPT-4o-mini calls with retry logic, prompt templates for LATAM market, Celery async tasks, sync dev mode via USE_SYNC_AI.
 
-### FASE 3 — Image Generation Service [NOT STARTED]
-Google Imagen 3 integration.
+### FASE 3 — Image Generation Service [COMPLETED]
+Google Imagen 3 (Vertex AI) integration for ad image generation. Images uploaded to GCS public bucket. Full async flow: user selects proposal → Celery dispatches image_generate task → Imagen 3 generates image → uploaded to GCS → proposal.image_url updated → campaign status set to image_ready → frontend polls and displays image.
 
 ### FASE 4 — Publishing Service [NOT STARTED]
 Meta Marketing API integration.

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useNavigate } from "react-router-dom"
 import { useMutation } from "@tanstack/react-query"
 import {
@@ -189,6 +189,23 @@ export default function CampaignNewPage() {
   const isWaitingForProposals = isPolling && pollTarget === "proposals_ready"
   const isWaitingForImage = isPolling && pollTarget === "image_ready"
 
+  // Loading timeout feedback
+  const [waitingSeconds, setWaitingSeconds] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (isWaitingForProposals || generateMutation.isPending) {
+      setWaitingSeconds(0)
+      timerRef.current = setInterval(() => setWaitingSeconds((s) => s + 1), 1000)
+    } else {
+      setWaitingSeconds(0)
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [isWaitingForProposals, generateMutation.isPending])
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       {/* Step indicators */}
@@ -243,13 +260,39 @@ export default function CampaignNewPage() {
           {(generateMutation.isPending || isWaitingForProposals) && (
             <Card className="border-dashed">
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <Dna className="h-10 w-10 text-primary animate-spin mb-4" />
-                <p className="text-sm font-medium">
-                  La IA está generando propuestas...
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Esto puede tomar unos segundos
-                </p>
+                {waitingSeconds < 60 ? (
+                  <>
+                    <Dna className="h-10 w-10 text-primary animate-spin mb-4" />
+                    <p className="text-sm font-medium">
+                      La IA está generando propuestas...
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {waitingSeconds > 30
+                        ? "La IA está tardando más de lo esperado. Por favor espera..."
+                        : "Esto puede tomar unos segundos"}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <Dna className="h-10 w-10 text-destructive mb-4" />
+                    <p className="text-sm font-medium">
+                      Hubo un problema. Intenta generar de nuevo.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => {
+                        if (campaignId) {
+                          handleRegenerate(0)
+                        }
+                      }}
+                    >
+                      <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                      Reintentar
+                    </Button>
+                  </>
+                )}
               </CardContent>
             </Card>
           )}

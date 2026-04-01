@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
+    # AI integration
+    AI_SERVICE_URL: str = "http://ai-generation-service:8002"
+    USE_SYNC_AI: bool = True
+
     class Config:
         env_file = ".env"
         extra = "ignore"
