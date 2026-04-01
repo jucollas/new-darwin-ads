@@ -1,0 +1,82 @@
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  frontend:
+    build:
+      context: ./frontend
+      target: builder
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+    environment:
+      - VITE_API_GATEWAY=http://localhost
+
+  campaign-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/campaign-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    environment:
+      - DEBUG=true
+
+  ai-generation-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/ai-generation-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    environment:
+      - DEBUG=true
+
+  image-generation-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/image-generation-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+    environment:
+      - DEBUG=true
+
+  publishing-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/publishing-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload"]
+    environment:
+      - DEBUG=true
+
+  analytics-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/analytics-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005", "--reload"]
+    environment:
+      - DEBUG=true
+
+  genetic-algorithm-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/genetic-algorithm-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006", "--reload"]
+    environment:
+      - DEBUG=true
+
+  notification-service:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/notification-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8007", "--reload"]
+    environment:
+      - DEBUG=true
+
+  celery-worker:
+    volumes:
+      - ./shared:/app/shared
+    command: ["celery", "-A", "shared.celery_app.config:celery_app", "worker", "--loglevel=debug"]
+    environment:
+      - DEBUG=true

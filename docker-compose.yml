@@ -1,0 +1,199 @@
+services:
+  traefik:
+    image: traefik:latest
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_GATEWAY: ${VITE_API_GATEWAY:-http://localhost}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.routers.frontend.priority=1"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    depends_on:
+      - traefik
+
+  dev-auth-service:
+    build:
+      context: .
+      dockerfile: services/dev-auth-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.devauth.rule=PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.devauth.entrypoints=web"
+      - "traefik.http.routers.devauth.priority=100"
+      - "traefik.http.services.devauth.loadbalancer.server.port=8000"
+    volumes:
+      - dev-auth-data:/app/data
+
+  campaign-service:
+    build:
+      context: .
+      dockerfile: services/campaign-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.campaign.rule=PathPrefix(`/api/v1/campaigns`)"
+      - "traefik.http.routers.campaign.entrypoints=web"
+      - "traefik.http.routers.campaign.priority=100"
+      - "traefik.http.services.campaign.loadbalancer.server.port=8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ai-generation-service:
+    build:
+      context: .
+      dockerfile: services/ai-generation-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ai.rule=PathPrefix(`/api/v1/ai`)"
+      - "traefik.http.routers.ai.entrypoints=web"
+      - "traefik.http.routers.ai.priority=100"
+      - "traefik.http.services.ai.loadbalancer.server.port=8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  image-generation-service:
+    build:
+      context: .
+      dockerfile: services/image-generation-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.images.rule=PathPrefix(`/api/v1/images`)"
+      - "traefik.http.routers.images.entrypoints=web"
+      - "traefik.http.routers.images.priority=100"
+      - "traefik.http.services.images.loadbalancer.server.port=8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  publishing-service:
+    build:
+      context: .
+      dockerfile: services/publishing-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.publish.rule=PathPrefix(`/api/v1/publish`)"
+      - "traefik.http.routers.publish.entrypoints=web"
+      - "traefik.http.routers.publish.priority=100"
+      - "traefik.http.services.publish.loadbalancer.server.port=8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: services/analytics-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.metrics.rule=PathPrefix(`/api/v1/metrics`)"
+      - "traefik.http.routers.metrics.entrypoints=web"
+      - "traefik.http.routers.metrics.priority=100"
+      - "traefik.http.services.metrics.loadbalancer.server.port=8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  genetic-algorithm-service:
+    build:
+      context: .
+      dockerfile: services/genetic-algorithm-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.optimize.rule=PathPrefix(`/api/v1/optimize`)"
+      - "traefik.http.routers.optimize.entrypoints=web"
+      - "traefik.http.routers.optimize.priority=100"
+      - "traefik.http.services.optimize.loadbalancer.server.port=8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: services/notification-service/Dockerfile
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.notifications.rule=PathPrefix(`/api/v1/notifications`)"
+      - "traefik.http.routers.notifications.entrypoints=web"
+      - "traefik.http.routers.notifications.priority=100"
+      - "traefik.http.services.notifications.loadbalancer.server.port=8007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: services/campaign-service/Dockerfile
+    env_file: .env
+    command: ["celery", "-A", "shared.celery_app.config:celery_app", "worker", "--loglevel=info"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  dev-auth-data:
