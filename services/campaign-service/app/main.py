@@ -22,6 +22,5 @@ app.include_router(router, prefix=settings.API_PREFIX)
 
 
 @app.get("/health")
-@app.get(f"{settings.API_PREFIX}/health")
 async def health():
     return {"status": "ok", "service": settings.SERVICE_NAME}

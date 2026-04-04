@@ -75,6 +75,7 @@ export interface ProposalUpdateRequest {
   script?: string
   image_prompt?: string
   target_audience?: Partial<TargetAudience>
+  cta_type?: "whatsapp_chat" | "link" | "call"
   whatsapp_number?: string
 }
 

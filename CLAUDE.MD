@@ -36,9 +36,11 @@ AdGen AI automates the creation and optimization of paid social media ads:
 | Containers         | Docker + Docker Compose        | latest      |
 | AI Text            | OpenAI API (GPT-4o / 4o-mini) | latest      |
 | AI Images          | Google Imagen 3 (Vertex AI)    | latest      |
-| Ads Platform       | Meta Marketing API             | v21.0       |
+| Ads Platform       | Meta Marketing API             | v25.0       |
+| Ads SDK            | facebook-business (Python SDK) | 25.0.0      |
 | Image Storage      | Google Cloud Storage           | -           |
 | HTTP Client        | httpx (async)                  | 0.27+       |
+| Token Encryption   | cryptography (Fernet)          | latest      |
 | Testing            | pytest + pytest-asyncio + httpx| latest      |
 
 ### CRITICAL RULES:
@@ -49,6 +51,7 @@ AdGen AI automates the creation and optimization of paid social media ads:
 - **NO requests library** — use httpx for all HTTP calls (async support)
 - **NO Pydantic v1 syntax** — use Pydantic v2 (model_validator, field_validator, ConfigDict)
 - **NO SQLAlchemy 1.x patterns** — no Column(), no declarative_base(), use DeclarativeBase and Mapped[]
+- **NO raw Meta Graph API calls via httpx** — use the official `facebook-business` Python SDK for all Meta Marketing API operations. httpx is only for inter-service communication.
 
 ---
 
@@ -81,6 +84,7 @@ Internet → Traefik (ports 80/443)
 | analytics_tasks      | analytics-service            | Celery Beat every 6 hours        |
 | genetic_tasks        | genetic-algorithm-service    | Celery Beat every 24 hours       |
 | notification_tasks   | notification-service         | Any service dispatches event     |
+| token_refresh_tasks  | publishing-service           | Celery Beat every 24 hours — checks tokens approaching 45-day mark and refreshes them |
 
 ---
 
@@ -158,9 +162,14 @@ class AdAccount(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(index=True)
-    meta_ad_account_id: Mapped[str]
+    meta_ad_account_id: Mapped[str]                    # Format: "act_123456789"
     meta_page_id: Mapped[str]
-    access_token_encrypted: Mapped[str]
+    meta_business_id: Mapped[str | None] = mapped_column(default=None)
+    whatsapp_phone_number: Mapped[str | None] = mapped_column(default=None)  # E.164 format, e.g. "+573001234567"
+    access_token_encrypted: Mapped[str]                # Fernet-encrypted long-lived token
+    token_expires_at: Mapped[datetime | None] = mapped_column(default=None)  # None = non-expiring (System User or Marketing API Standard Access)
+    token_scopes: Mapped[list] = mapped_column(JSON, default=["ads_management", "ads_read"])
+    token_last_verified_at: Mapped[datetime | None] = mapped_column(default=None)
     is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(server_default=text("NOW()"))
 
@@ -175,12 +184,18 @@ class Publication(Base):
     ad_account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("publishing_schema.ad_accounts.id"))
     meta_campaign_id: Mapped[str | None] = mapped_column(default=None)
     meta_adset_id: Mapped[str | None] = mapped_column(default=None)
+    meta_adcreative_id: Mapped[str | None] = mapped_column(default=None)  # Full hierarchy: Campaign → Ad Set → Ad Creative → Ad
     meta_ad_id: Mapped[str | None] = mapped_column(default=None)
+    meta_image_hash: Mapped[str | None] = mapped_column(default=None)      # Image hash returned by Meta after upload
+    special_ad_categories: Mapped[list] = mapped_column(JSON, default=[])  # REQUIRED by Meta even if empty
+    destination_type: Mapped[str] = mapped_column(default="WHATSAPP")      # WHATSAPP | WEBSITE | APP
+    campaign_objective: Mapped[str] = mapped_column(default="OUTCOME_ENGAGEMENT")  # ODAX objectives only
     status: Mapped[str] = mapped_column(default="queued")
     # Valid statuses: queued | publishing | active | paused | failed
-    budget_daily_cents: Mapped[int]
+    budget_daily_cents: Mapped[int]                                         # Budget in smallest currency unit (cents/centavos)
     published_at: Mapped[datetime | None] = mapped_column(default=None)
     error_message: Mapped[str | None] = mapped_column(default=None)
+    error_code: Mapped[int | None] = mapped_column(default=None)           # Meta API error code (e.g., 190, 100, 17)
     created_at: Mapped[datetime] = mapped_column(server_default=text("NOW()"))
 ```
 
@@ -249,7 +264,7 @@ class Notification(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(index=True)
     type: Mapped[str]
-    # Valid types: proposals_ready | image_ready | campaign_published | campaign_failed | optimization_complete | budget_alert
+    # Valid types: proposals_ready | image_ready | campaign_published | campaign_failed | optimization_complete | budget_alert | token_expiring
     channel: Mapped[str] = mapped_column(default="in_app")
     # Valid channels: in_app | email | whatsapp
     title: Mapped[str]
@@ -337,17 +352,35 @@ class Notification(Base):
 
 ### publishing-service (port 8004, prefix: /api/v1/publish)
 
-| Method | Path                          | Description                        | Auth |
-|--------|-------------------------------|------------------------------------|------|
-| POST   | /ad-accounts                  | Register Meta Ads account          | JWT  |
-| GET    | /ad-accounts                  | List user's ad accounts            | JWT  |
-| DELETE | /ad-accounts/{id}             | Disconnect ad account              | JWT  |
-| POST   | /                             | Create full ad in Meta Ads         | JWT  |
-| GET    | /publications                 | List user's publications           | JWT  |
-| GET    | /publications/{id}/status     | Get current ad status from Meta    | JWT  |
-| POST   | /publications/{id}/pause      | Pause ad in Meta                   | JWT  |
-| POST   | /publications/{id}/resume     | Resume ad in Meta                  | JWT  |
-| DELETE | /publications/{id}            | Delete ad from Meta                | JWT  |
+| Method | Path                          | Description                                          | Auth |
+|--------|-------------------------------|------------------------------------------------------|------|
+| GET    | /auth/meta/login              | Redirect user to Meta OAuth authorization dialog     | JWT  |
+| GET    | /auth/meta/callback           | OAuth callback — exchange code for long-lived token   | JWT  |
+| POST   | /ad-accounts                  | Register Meta Ads account (manual token entry)       | JWT  |
+| GET    | /ad-accounts                  | List user's ad accounts                              | JWT  |
+| GET    | /ad-accounts/{id}/verify      | Verify token health (detect error 190)               | JWT  |
+| DELETE | /ad-accounts/{id}             | Disconnect ad account                                | JWT  |
+| POST   | /                             | Create full ad in Meta Ads (Campaign → AdSet → Creative → Ad) | JWT |
+| GET    | /publications                 | List user's publications                             | JWT  |
+| GET    | /publications/{id}/status     | Get current ad status from Meta                      | JWT  |
+| POST   | /publications/{id}/pause      | Pause ad in Meta                                     | JWT  |
+| POST   | /publications/{id}/resume     | Resume ad in Meta                                    | JWT  |
+| DELETE | /publications/{id}            | Delete ad from Meta (archive, irreversible)          | JWT  |
+| GET    | /health                       | Health check                                         | None |
+
+**OAuth flow details:**
+1. `GET /auth/meta/login` — Generates CSRF `state`, redirects to `https://www.facebook.com/v25.0/dialog/oauth` with scopes: `ads_management,ads_read,business_management,pages_manage_ads,pages_read_engagement,pages_show_list`
+2. `GET /auth/meta/callback` — Validates `state`, exchanges `code` for short-lived token, exchanges for long-lived token, fetches user's ad accounts via `/me/adaccounts`, stores encrypted token + account data
+3. Long-lived tokens with Marketing API Standard Access are **non-expiring** but can be invalidated (password change, app deauthorization, suspicious activity). Celery Beat checks token health daily and refreshes at 45-day mark as a precaution.
+
+**Campaign creation flow (POST /):**
+The publishing service creates the full Meta Ads hierarchy in order using the `facebook-business` SDK:
+1. Upload image to Meta (returns `image_hash`)
+2. Create Campaign (with `special_ad_categories`, `objective`, `status: PAUSED`)
+3. Create Ad Set (with targeting, budget in cents, `destination_type: WHATSAPP`, `promoted_object`)
+4. Create Ad Creative (with `object_story_spec`, `page_welcome_message`, CTA `WHATSAPP_MESSAGE`)
+5. Create Ad (links creative to ad set)
+6. Activate all objects (set status to `ACTIVE`)
 
 ### analytics-service (port 8005, prefix: /api/v1/metrics)
 
@@ -457,8 +490,17 @@ adgen-ai/
 │   │       └── storage_service.py     # Upload to Google Cloud Storage
 │   │
 │   ├── publishing-service/
-│   │   └── app/services/
-│   │       └── meta_ads_service.py    # Meta Marketing API integration
+│   │   └── app/
+│   │       ├── api/
+│   │       │   ├── router.py          # All publish endpoints + OAuth routes
+│   │       │   └── dependencies.py
+│   │       ├── services/
+│   │       │   ├── meta_ads_service.py    # facebook-business SDK wrapper — creates per-user FacebookAdsApi instances
+│   │       │   ├── meta_oauth_service.py  # OAuth flow: login redirect, callback, token exchange
+│   │       │   ├── token_manager.py       # Token health checks, refresh logic, error 190 detection
+│   │       │   └── token_encryption.py    # Fernet encrypt/decrypt for Meta access tokens
+│   │       └── tasks/
+│   │           └── celery_tasks.py        # publish_tasks + token_refresh_tasks
 │   │
 │   ├── analytics-service/
 │   │   └── app/services/
@@ -645,6 +687,52 @@ class CampaignService:
         return result.scalars().all(), total
 ```
 
+### Meta Ads SDK Pattern (publishing-service)
+```python
+# app/services/meta_ads_service.py
+from facebook_business.api import FacebookAdsApi
+from facebook_business.session import FacebookSession
+from facebook_business.adobjects.adaccount import AdAccount
+from facebook_business.adobjects.campaign import Campaign
+from facebook_business.adobjects.adset import AdSet
+from facebook_business.adobjects.adcreative import AdCreative
+from facebook_business.adobjects.ad import Ad
+from facebook_business.adobjects.adimage import AdImage
+from app.config import settings
+
+class MetaAdsService:
+    """Creates per-user FacebookAdsApi instances for multi-tenant operation."""
+
+    def __init__(self, access_token: str):
+        session = FacebookSession(
+            app_id=settings.META_APP_ID,
+            app_secret=settings.META_APP_SECRET,
+            access_token=access_token,
+        )
+        self.api = FacebookAdsApi(session)
+
+    def create_whatsapp_campaign(
+        self,
+        ad_account_id: str,
+        page_id: str,
+        name: str,
+        copy_text: str,
+        image_path: str,
+        target_audience: dict,
+        whatsapp_number: str,
+        daily_budget_cents: int,
+        welcome_message: str = "Welcome! How can we help you today?",
+    ) -> dict:
+        """Creates complete Meta Ads hierarchy for WhatsApp Click-to-Chat."""
+        # 1. Upload image → image_hash
+        # 2. Create Campaign (objective=OUTCOME_ENGAGEMENT, special_ad_categories=[])
+        # 3. Create AdSet (destination_type=WHATSAPP, promoted_object with page_id + whatsapp_number)
+        # 4. Create AdCreative (CTA=WHATSAPP_MESSAGE, page_welcome_message)
+        # 5. Create Ad (link creative to adset)
+        # Returns dict with all Meta IDs: {meta_campaign_id, meta_adset_id, meta_adcreative_id, meta_ad_id, meta_image_hash}
+        ...
+```
+
 ### Router Pattern
 ```python
 # app/api/router.py
@@ -820,9 +908,22 @@ GOOGLE_CLOUD_LOCATION=us-central1
 GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
 GCS_BUCKET_NAME=adgen-images
 
-# Meta Ads
+# Meta Ads — Publishing Service
 META_APP_ID=your-app-id
 META_APP_SECRET=your-app-secret
+META_API_VERSION=v25.0
+META_GRAPH_API_BASE_URL=https://graph.facebook.com
+META_REDIRECT_URI=https://your-domain.com/api/v1/publish/auth/meta/callback
+META_TOKEN_ENCRYPTION_KEY=your-fernet-key-here
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+META_SANDBOX_AD_ACCOUNT_ID=act_sandbox_123456789
+# Sandbox account for testing without spending real money (Marketing API → Tools in app dashboard)
+WHATSAPP_BUSINESS_ACCOUNT_ID=your-waba-id
+META_DEFAULT_CURRENCY=COP
+META_DEFAULT_BID_STRATEGY=LOWEST_COST_WITHOUT_CAP
+META_DEFAULT_BILLING_EVENT=IMPRESSIONS
+META_DEFAULT_OPTIMIZATION_GOAL=CONVERSATIONS
+META_DEFAULT_CAMPAIGN_OBJECTIVE=OUTCOME_ENGAGEMENT
 
 # Notifications
 SENDGRID_API_KEY=SG.xxx
@@ -855,12 +956,13 @@ ENVIRONMENT=development
 - NEVER log tokens, passwords, or API keys
 - ALWAYS validate JWT on every endpoint except /health
 - ALWAYS check that the resource belongs to the current user (user_id from JWT)
-- Encrypt Meta access tokens before storing in DB
+- Encrypt Meta access tokens before storing in DB (Fernet symmetric encryption via META_TOKEN_ENCRYPTION_KEY)
 
 ### Testing:
 - Use pytest with pytest-asyncio
 - Use httpx.AsyncClient for endpoint testing
 - Mock external APIs (OpenAI, Google, Meta) — never call real APIs in tests
+- Mock the `facebook-business` SDK in tests — use `unittest.mock.patch` on SDK classes
 - Each service has its own test suite
 - Minimum: test happy path + error cases for every endpoint
 
@@ -868,6 +970,20 @@ ENVIRONMENT=development
 - NEVER commit .env files
 - NEVER commit credentials or API keys
 - Commit .env.example with placeholder values
+
+### Meta Marketing API:
+- **ALWAYS use the `facebook-business` Python SDK** — never raw httpx calls to Graph API
+- **ALWAYS create per-user `FacebookAdsApi` instances** via `FacebookSession` for multi-tenant isolation — never use the global `FacebookAdsApi.init()` in production code
+- **ALWAYS set `special_ad_categories`** on campaign creation, even if empty (`[]`) — omitting it causes immediate ad rejection
+- **ALL budget values are in the smallest currency unit** (cents for USD, centavos for COP). `daily_budget: 1000` = $10.00. Double-check to avoid 100x over/underspend.
+- **ALWAYS pin API version** (`api_version="v25.0"`) — deprecated versions fail completely with no graceful fallback
+- **Handle error code 190 (OAuthException)** on every SDK call — detect invalidated tokens and flag user for re-authentication
+- **Handle error codes 17/613 (rate limit)** with exponential backoff — Development tier has only 60 points / 300s block
+- **WhatsApp ads require**: `destination_type="WHATSAPP"`, `promoted_object` with `page_id` + `whatsapp_phone_number`, CTA type `WHATSAPP_MESSAGE`, link `https://api.whatsapp.com/send`
+- **ODAX objectives only**: `OUTCOME_ENGAGEMENT` (default for WhatsApp), `OUTCOME_LEADS`, `OUTCOME_SALES`, `OUTCOME_TRAFFIC`
+- **Use Sandbox Ad Account** (`META_SANDBOX_AD_ACCOUNT_ID`) for all development and testing — ads are created but never delivered, insights return simulated data
+- **Interest targeting IDs** must be resolved via the Targeting Search API (`TargetingSearch.search`) — never hardcode interest IDs
+- **Expect up to 3% data variance** between API insights and Ads Manager UI — this is a confirmed known issue
 
 ---
 
@@ -885,8 +1001,20 @@ GPT integration for proposal generation. Real OpenAI GPT-4o-mini calls with retr
 ### FASE 3 — Image Generation Service [COMPLETED]
 Google Imagen 3 (Vertex AI) integration for ad image generation. Images uploaded to GCS public bucket. Full async flow: user selects proposal → Celery dispatches image_generate task → Imagen 3 generates image → uploaded to GCS → proposal.image_url updated → campaign status set to image_ready → frontend polls and displays image.
 
-### FASE 4 — Publishing Service [NOT STARTED]
-Meta Marketing API integration.
+### FASE 4 — Publishing Service [IN PROGRESS]
+Meta Marketing API v25.0 integration using the official `facebook-business` Python SDK (v25.0.0).
+
+**Scope:**
+- **OAuth flow**: Meta authorization dialog → code exchange → long-lived token storage (Fernet-encrypted). Scopes: `ads_management`, `ads_read`, `business_management`, `pages_manage_ads`, `pages_read_engagement`, `pages_show_list`.
+- **Ad Account management**: CRUD for user's linked Meta ad accounts with token health verification.
+- **Token lifecycle**: Celery Beat daily task checks `token_expires_at`, refreshes tokens approaching 45-day mark via `fb_exchange_token` endpoint, detects error code 190 on API calls and flags accounts for re-auth, dispatches `token_expiring` notification.
+- **Campaign creation**: Full Meta Ads hierarchy via SDK — Campaign → Ad Set → Ad Creative → Ad. Per-user `FacebookAdsApi` instances via `FacebookSession` for multi-tenant isolation.
+- **WhatsApp Click-to-Chat ads**: `destination_type=WHATSAPP`, `promoted_object` with `page_id` + `whatsapp_phone_number`, CTA `WHATSAPP_MESSAGE`, `page_welcome_message` with autofill messages and icebreakers.
+- **ODAX objectives only**: `OUTCOME_ENGAGEMENT` (default), `OUTCOME_LEADS`, `OUTCOME_SALES`, `OUTCOME_TRAFFIC`.
+- **Fernet encryption** for stored access tokens via `META_TOKEN_ENCRYPTION_KEY`.
+- **Error handling**: Map Meta error codes (190=token invalid, 17/613=rate limit, 100=invalid param, 275=missing permission, 1487901=validation with `blame_field_specs`) to appropriate HTTP responses and retry logic.
+- **Sandbox-first development**: All dev/test against `META_SANDBOX_AD_ACCOUNT_ID` — ads created but never delivered.
+- **Pause/resume/delete**: Map to Meta's `PAUSED`/`ACTIVE`/`ARCHIVED` statuses via SDK `api_update`.
 
 ### FASE 5 — Analytics Service [NOT STARTED]
 Meta Insights API metrics collection.
@@ -912,4 +1040,5 @@ End-to-end testing, error handling, logging.
 6. **Use async everywhere.** All DB operations, HTTP calls, and endpoints must be async.
 7. **Cross-service references are plain UUIDs**, not ForeignKeys.
 8. **Internal service calls use Docker hostnames** (e.g., `http://campaign-service:8001`), never `localhost`.
-9. **Update this file** when a phase is completed by changing its status from [NOT STARTED] to [COMPLETED].
+9. **Meta SDK calls are synchronous** — the `facebook-business` SDK does not support async. Wrap SDK calls in `asyncio.to_thread()` or execute within Celery tasks (which are already synchronous).
+10. **Update this file** when a phase is completed by changing its status from [NOT STARTED] to [COMPLETED].

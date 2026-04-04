@@ -19,6 +19,11 @@ from app.services.campaign_service import CampaignService
 router = APIRouter(tags=["campaigns"])
 
 
+@router.get("/health")
+async def health():
+    return {"status": "ok", "service": "campaign-service"}
+
+
 def _parse_uuid(value: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)

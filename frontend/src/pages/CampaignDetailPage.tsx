@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
@@ -31,12 +32,14 @@ import {
 } from "@/components/ui/dialog"
 import { MetricCard } from "@/components/MetricCard"
 import { StatusBadge } from "@/components/StatusBadge"
+import { ProposalDetailModal } from "@/components/ProposalDetailModal"
 import type { Campaign, Proposal, CampaignMetric } from "@/types"
 
 export default function CampaignDetailPage() {
   const { campaignId } = useParams<{ campaignId: string }>()
   const navigate = useNavigate()
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [detailProposal, setDetailProposal] = useState<Proposal | null>(null)
 
   const { data: campaign, isLoading: campaignLoading } = useQuery<Campaign>({
     queryKey: ["campaign", campaignId],
@@ -246,14 +249,23 @@ export default function CampaignDetailPage() {
             {proposals.map((proposal) => (
               <Card
                 key={proposal.id}
-                className={`${proposal.is_selected ? "border-primary" : ""}`}
+                className={`cursor-pointer transition-shadow hover:shadow-md ${proposal.is_selected ? "border-primary" : ""}`}
+                onClick={() => setDetailProposal(proposal)}
               >
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     {proposal.is_selected && (
-                      <span className="text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded-full">
+                      <Badge className="text-[10px] px-1.5 py-0">
                         Seleccionada
-                      </span>
+                      </Badge>
+                    )}
+                    {proposal.is_edited && (
+                      <Badge
+                        variant="secondary"
+                        className="text-[10px] px-1.5 py-0"
+                      >
+                        Editada
+                      </Badge>
                     )}
                     {proposal.copy_text.slice(0, 50)}...
                   </CardTitle>
@@ -268,7 +280,9 @@ export default function CampaignDetailPage() {
                   )}
                   <div>
                     <span className="font-medium">Script: </span>
-                    <span className="text-muted-foreground line-clamp-2">{proposal.script}</span>
+                    <span className="text-muted-foreground line-clamp-2">
+                      {proposal.script}
+                    </span>
                   </div>
                   <div>
                     <span className="font-medium">CTA: </span>
@@ -280,12 +294,38 @@ export default function CampaignDetailPage() {
                       month: "short",
                     })}
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full mt-2"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDetailProposal(proposal)
+                    }}
+                  >
+                    <Eye className="mr-1 h-3.5 w-3.5" />
+                    Ver detalles
+                  </Button>
                 </CardContent>
               </Card>
             ))}
           </div>
         )}
       </div>
+
+      {/* Proposal detail modal */}
+      <ProposalDetailModal
+        proposal={detailProposal}
+        open={!!detailProposal}
+        onOpenChange={(open) => {
+          if (!open) setDetailProposal(null)
+        }}
+        onProposalUpdated={() => {
+          queryClient.invalidateQueries({
+            queryKey: ["campaign-proposals", campaignId],
+          })
+        }}
+      />
 
       {/* Delete confirmation dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

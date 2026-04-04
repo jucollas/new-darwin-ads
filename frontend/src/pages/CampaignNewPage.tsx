@@ -24,9 +24,8 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription,
-  CardFooter,
 } from "@/components/ui/card"
+import { ProposalCard } from "@/components/ProposalCard"
 import type { Campaign, Proposal, CampaignStatus } from "@/types"
 
 type Step = 1 | 2 | 3
@@ -328,68 +327,21 @@ export default function CampaignNewPage() {
           {!isWaitingForImage && (
             <>
               <div className="grid gap-4 sm:grid-cols-3">
-                {proposals.map((proposal, index) => {
-                  const isRegenerating = regeneratingIdx === index
-                  return (
-                    <Card
-                      key={proposal.id}
-                      className="relative flex flex-col"
-                    >
-                      {isRegenerating && (
-                        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80">
-                          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                        </div>
-                      )}
-                      <CardHeader>
-                        <CardTitle className="text-base line-clamp-2">
-                          {proposal.copy_text.slice(0, 50)}...
-                        </CardTitle>
-                        <CardDescription className="line-clamp-3">
-                          {proposal.script}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex-1 space-y-2 text-sm">
-                        <div>
-                          <span className="font-medium">CTA: </span>
-                          {proposal.cta_type}
-                        </div>
-                        <div>
-                          <span className="font-medium">Audiencia: </span>
-                          <span className="text-muted-foreground">
-                            {formatAudience(proposal)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="font-medium">Imagen: </span>
-                          <span className="text-muted-foreground line-clamp-2">
-                            {proposal.image_prompt}
-                          </span>
-                        </div>
-                      </CardContent>
-                      <CardFooter className="gap-2">
-                        <Button
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => selectProposal(proposal)}
-                          disabled={selectMutation.isPending}
-                        >
-                          {selectMutation.isPending ? (
-                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                          ) : null}
-                          Elegir
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleRegenerate(index)}
-                          disabled={isRegenerating}
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </Button>
-                      </CardFooter>
-                    </Card>
-                  )
-                })}
+                {proposals.map((proposal, index) => (
+                  <ProposalCard
+                    key={proposal.id}
+                    proposal={proposal}
+                    index={index}
+                    onSelect={() => selectProposal(proposal)}
+                    onRegenerate={() => handleRegenerate(index)}
+                    isRegenerating={regeneratingIdx === index}
+                    onProposalUpdated={(updated) => {
+                      setProposals((prev) =>
+                        prev.map((p) => (p.id === updated.id ? updated : p)),
+                      )
+                    }}
+                  />
+                ))}
               </div>
 
               <button
