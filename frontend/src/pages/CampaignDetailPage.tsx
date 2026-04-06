@@ -17,6 +17,9 @@ import {
   Loader2,
   Pause,
   Play,
+  Send,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -33,6 +36,9 @@ import {
 import { MetricCard } from "@/components/MetricCard"
 import { StatusBadge } from "@/components/StatusBadge"
 import { ProposalDetailModal } from "@/components/ProposalDetailModal"
+import { PublishDialog } from "@/components/PublishDialog"
+import { useCampaignPublication } from "@/hooks/usePublishing"
+import { pausePublication, resumePublication } from "@/lib/api"
 import type { Campaign, Proposal, CampaignMetric } from "@/types"
 
 export default function CampaignDetailPage() {
@@ -40,6 +46,7 @@ export default function CampaignDetailPage() {
   const navigate = useNavigate()
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [detailProposal, setDetailProposal] = useState<Proposal | null>(null)
+  const [publishOpen, setPublishOpen] = useState(false)
 
   const { data: campaign, isLoading: campaignLoading } = useQuery<Campaign>({
     queryKey: ["campaign", campaignId],
@@ -65,6 +72,17 @@ export default function CampaignDetailPage() {
       }),
   })
 
+  const shouldPollPublication =
+    campaign?.status === "publishing" ||
+    campaign?.status === "published" ||
+    campaign?.status === "paused" ||
+    campaign?.status === "failed"
+
+  const { data: publication } = useCampaignPublication(
+    campaignId ?? null,
+    shouldPollPublication,
+  )
+
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(ENDPOINTS.campaigns.delete(campaignId!)),
     onSuccess: () => {
@@ -78,19 +96,35 @@ export default function CampaignDetailPage() {
   })
 
   const pauseMutation = useMutation({
-    mutationFn: () => api.post(ENDPOINTS.campaigns.pause(campaignId!)),
+    mutationFn: async () => {
+      // Pause Meta ad via publishing-service first
+      if (publication?.id) {
+        await pausePublication(publication.id)
+      }
+      // Then update campaign internal status
+      await api.post(ENDPOINTS.campaigns.pause(campaignId!))
+    },
     onSuccess: () => {
       toast.success("Campaña pausada")
       queryClient.invalidateQueries({ queryKey: ["campaign", campaignId] })
+      queryClient.invalidateQueries({ queryKey: ["campaign-publication", campaignId] })
     },
     onError: () => toast.error("Error al pausar la campaña"),
   })
 
   const resumeMutation = useMutation({
-    mutationFn: () => api.post(ENDPOINTS.campaigns.resume(campaignId!)),
+    mutationFn: async () => {
+      // Resume Meta ad via publishing-service first
+      if (publication?.id) {
+        await resumePublication(publication.id)
+      }
+      // Then update campaign internal status
+      await api.post(ENDPOINTS.campaigns.resume(campaignId!))
+    },
     onSuccess: () => {
       toast.success("Campaña reactivada")
       queryClient.invalidateQueries({ queryKey: ["campaign", campaignId] })
+      queryClient.invalidateQueries({ queryKey: ["campaign-publication", campaignId] })
     },
     onError: () => toast.error("Error al reactivar la campaña"),
   })
@@ -225,6 +259,144 @@ export default function CampaignDetailPage() {
           icon={Target}
         />
       </div>
+
+      {/* Publishing section */}
+      {campaign.status === "image_ready" && selectedProposal && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="flex items-center justify-between py-4">
+            <div>
+              <p className="font-medium">Tu campaña está lista para publicar</p>
+              <p className="text-sm text-muted-foreground">
+                Publica tu anuncio en Meta Ads
+              </p>
+            </div>
+            <Button onClick={() => setPublishOpen(true)}>
+              <Send className="mr-2 h-4 w-4" />
+              Publicar en Meta
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {campaign.status === "publishing" && (
+        <Card>
+          <CardContent className="flex items-center gap-3 py-6">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <div>
+              <p className="font-medium">Publicando campaña...</p>
+              <p className="text-sm text-muted-foreground">
+                Esto puede tomar unos minutos
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {(campaign.status === "published" || campaign.status === "paused") &&
+        publication && (
+          <Card
+            className={
+              campaign.status === "published"
+                ? "border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950"
+                : "border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950"
+            }
+          >
+            <CardContent className="py-6 space-y-3">
+              <div className="flex items-center gap-3">
+                {campaign.status === "published" ? (
+                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                ) : (
+                  <Pause className="h-5 w-5 text-yellow-600" />
+                )}
+                <p
+                  className={`font-medium ${campaign.status === "published" ? "text-green-700 dark:text-green-400" : "text-yellow-700 dark:text-yellow-400"}`}
+                >
+                  {campaign.status === "published"
+                    ? "Campaña publicada"
+                    : "Campaña pausada"}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-muted-foreground ml-8">
+                {publication.meta_campaign_id && (
+                  <p>
+                    <span className="font-medium">Campaign ID:</span>{" "}
+                    {publication.meta_campaign_id}
+                  </p>
+                )}
+                {publication.meta_adset_id && (
+                  <p>
+                    <span className="font-medium">Ad Set ID:</span>{" "}
+                    {publication.meta_adset_id}
+                  </p>
+                )}
+                {publication.meta_ad_id && (
+                  <p>
+                    <span className="font-medium">Ad ID:</span>{" "}
+                    {publication.meta_ad_id}
+                  </p>
+                )}
+                {publication.budget_daily_cents != null && (
+                  <p>
+                    <span className="font-medium">Presupuesto diario:</span> $
+                    {(publication.budget_daily_cents / 100).toLocaleString()}
+                  </p>
+                )}
+                {publication.published_at && (
+                  <p>
+                    <span className="font-medium">Publicada el:</span>{" "}
+                    {new Date(publication.published_at).toLocaleDateString(
+                      "es-ES",
+                      { day: "numeric", month: "long", year: "numeric" },
+                    )}
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+      {campaign.status === "failed" && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="py-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-destructive" />
+                <div>
+                  <p className="font-medium text-destructive">
+                    Error al publicar
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {publication?.error_message || "Ocurrió un error inesperado"}
+                  </p>
+                  {publication?.error_code && (
+                    <p className="text-xs text-muted-foreground">
+                      Código de error: {publication.error_code}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {selectedProposal && (
+                <Button
+                  variant="outline"
+                  onClick={() => setPublishOpen(true)}
+                >
+                  Reintentar
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* PublishDialog */}
+      {selectedProposal && (
+        <PublishDialog
+          campaignId={campaignId!}
+          proposalId={selectedProposal.id}
+          isOpen={publishOpen}
+          onClose={() => setPublishOpen(false)}
+        />
+      )}
 
       {/* Proposals section */}
       <div className="space-y-4">

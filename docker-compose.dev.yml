@@ -80,3 +80,18 @@ services:
     command: ["celery", "-A", "shared.celery_app.config:celery_app", "worker", "--loglevel=debug"]
     environment:
       - DEBUG=true
+
+  publishing-worker:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/publishing-service/app:/app/app
+    command: ["celery", "-A", "worker:celery_app", "worker", "--loglevel=debug", "-Q", "publish_tasks,token_refresh_tasks", "-c", "2"]
+    environment:
+      - DEBUG=true
+
+  celery-beat:
+    volumes:
+      - ./shared:/app/shared
+      - ./services/publishing-service/app:/app/app
+    environment:
+      - DEBUG=true

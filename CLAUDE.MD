@@ -369,7 +369,7 @@ class Notification(Base):
 | GET    | /health                       | Health check                                         | None |
 
 **OAuth flow details:**
-1. `GET /auth/meta/login` — Generates CSRF `state`, redirects to `https://www.facebook.com/v25.0/dialog/oauth` with scopes: `ads_management,ads_read,business_management,pages_manage_ads,pages_read_engagement,pages_show_list`
+1. `GET /auth/meta/login` — Generates CSRF `state`, redirects to `https://www.facebook.com/v25.0/dialog/oauth` with scopes: `ads_management,ads_read,business_management,pages_manage_ads,pages_read_engagement,pages_show_list,whatsapp_business_management,whatsapp_business_messaging`
 2. `GET /auth/meta/callback` — Validates `state`, exchanges `code` for short-lived token, exchanges for long-lived token, fetches user's ad accounts via `/me/adaccounts`, stores encrypted token + account data
 3. Long-lived tokens with Marketing API Standard Access are **non-expiring** but can be invalidated (password change, app deauthorization, suspicious activity). Celery Beat checks token health daily and refreshes at 45-day mark as a precaution.
 
@@ -1001,7 +1001,7 @@ GPT integration for proposal generation. Real OpenAI GPT-4o-mini calls with retr
 ### FASE 3 — Image Generation Service [COMPLETED]
 Google Imagen 3 (Vertex AI) integration for ad image generation. Images uploaded to GCS public bucket. Full async flow: user selects proposal → Celery dispatches image_generate task → Imagen 3 generates image → uploaded to GCS → proposal.image_url updated → campaign status set to image_ready → frontend polls and displays image.
 
-### FASE 4 — Publishing Service [IN PROGRESS]
+### FASE 4 — Publishing Service [COMPLETED]
 Meta Marketing API v25.0 integration using the official `facebook-business` Python SDK (v25.0.0).
 
 **Scope:**

@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation } from "@tanstack/react-query"
 import { queryClient } from "@/lib/queryClient"
-import api from "@/lib/api"
+import api, { getMetaLoginUrl } from "@/lib/api"
 import { ENDPOINTS } from "@/lib/endpoints"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth.store"
@@ -98,8 +98,17 @@ export default function ProfilePage() {
     navigate("/login")
   }
 
-  const handleConnectMeta = () => {
-    window.location.href = `${import.meta.env.VITE_API_GATEWAY || ""}${ENDPOINTS.auth.metaConnect}`
+  const handleConnectMeta = async () => {
+    try {
+      const { data } = await getMetaLoginUrl()
+      if (data.login_url && data.login_url.startsWith("https://www.facebook.com/")) {
+        window.location.href = data.login_url
+      } else {
+        toast.error("La URL de conexión no es válida. Verifica que el publishing-service esté activo.")
+      }
+    } catch {
+      toast.error("Error al obtener la URL de conexión con Meta")
+    }
   }
 
   return (

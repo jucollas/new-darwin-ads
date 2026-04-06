@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator, field_serializer
+from typing import Self
+
+from pydantic import BaseModel, ConfigDict, field_validator, field_serializer, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +33,16 @@ class ProposalUpdate(BaseModel):
     target_audience: dict | None = None
     cta_type: str | None = None
     whatsapp_number: str | None = None
+
+    @model_validator(mode="after")
+    def enforce_minimum_age_with_interests(self) -> Self:
+        """Meta requires age_min >= 18 when using interest-based targeting."""
+        if self.target_audience:
+            interests = self.target_audience.get("interests", [])
+            age_min = self.target_audience.get("age_min", 18)
+            if interests and age_min < 18:
+                self.target_audience["age_min"] = 18
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ export const ENDPOINTS = {
 
   // publishing-service
   publish: {
+    metaLoginUrl: "/api/v1/publish/auth/meta/login",
     adAccounts: "/api/v1/publish/ad-accounts",
     adAccountDetail: (id: string) => `/api/v1/publish/ad-accounts/${id}`,
     create: "/api/v1/publish",

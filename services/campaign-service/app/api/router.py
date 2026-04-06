@@ -1,10 +1,12 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.auth.jwt_middleware import get_current_user
 from shared.database.session import get_db
+from app.models.campaign import Proposal
 from app.schemas.campaign import (
     CampaignCreate,
     CampaignDetailResponse,
@@ -186,7 +188,10 @@ async def publish_campaign(
     service = CampaignService(db)
     campaign = await service.publish(_parse_uuid(campaign_id), current_user["user_id"])
     if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+        raise HTTPException(
+            status_code=400,
+            detail="Campaign not found or not ready to publish (must be in 'image_ready' status with a selected proposal)",
+        )
     return campaign
 
 
@@ -258,6 +263,42 @@ async def update_proposal_image_internal(
     if not updated:
         raise HTTPException(status_code=404, detail="Proposal not found")
     return {"status": "ok"}
+
+
+@router.get("/internal/{campaign_id}/proposal/{proposal_id}", include_in_schema=False)
+async def get_proposal_internal(
+    campaign_id: str,
+    proposal_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint for publishing-service to fetch proposal data."""
+    service = CampaignService(db)
+    campaign = await service.get_by_id_internal(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    stmt = (
+        select(Proposal)
+        .where(
+            Proposal.campaign_id == uuid.UUID(campaign_id),
+            Proposal.id == uuid.UUID(proposal_id),
+        )
+    )
+    result = await db.execute(stmt)
+    proposal = result.scalar_one_or_none()
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+
+    return {
+        "copy_text": proposal.copy_text,
+        "script": proposal.script,
+        "image_prompt": proposal.image_prompt,
+        "image_url": proposal.image_url,
+        "target_audience": proposal.target_audience,
+        "cta_type": proposal.cta_type,
+        "whatsapp_number": proposal.whatsapp_number,
+        "campaign_user_prompt": campaign.user_prompt,
+    }
 
 
 @router.put("/internal/{campaign_id}/status", include_in_schema=False)

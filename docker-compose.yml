@@ -229,6 +229,31 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  publishing-worker:
+    build:
+      context: .
+      dockerfile: services/publishing-service/Dockerfile
+    env_file: .env
+    command: ["celery", "-A", "worker:celery_app", "worker", "--loglevel=info", "-Q", "publish_tasks,token_refresh_tasks", "-c", "2"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      publishing-service:
+        condition: service_started
+      campaign-service:
+        condition: service_started
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: services/publishing-service/Dockerfile
+    env_file: .env
+    command: ["celery", "-A", "worker:celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   dev-auth-data:

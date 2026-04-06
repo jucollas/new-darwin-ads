@@ -126,6 +126,7 @@ export interface AdAccount {
   user_id: string
   meta_ad_account_id: string
   meta_page_id: string
+  whatsapp_phone_number: string | null
   is_active: boolean
   created_at: string
 }
@@ -142,6 +143,7 @@ export interface Publication {
   budget_daily_cents: number
   published_at: string | null
   error_message: string | null
+  error_code: number | null
   created_at: string
 }
 

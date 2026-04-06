@@ -276,7 +276,15 @@ class CampaignService:
         campaign = await self.get_by_id(campaign_id, user_id)
         if not campaign:
             return None
-        campaign.status = "published"
+        if campaign.status not in ("image_ready",):
+            return None
+        if not campaign.selected_proposal_id:
+            return None
+        # NOTE: CLAUDE.md specifies this endpoint should dispatch a Celery task to publish_tasks queue.
+        # Current implementation: sets status to "publishing" and returns — the frontend then POSTs
+        # directly to publishing-service. This works but diverges from the intended architecture.
+        # TODO: Migrate to Celery dispatch in a future refactor (requires frontend changes).
+        campaign.status = "publishing"
         await self.db.flush()
         return campaign
 

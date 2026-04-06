@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth.store'
 import { useEffect } from 'react'
 import MainLayout from '@/layouts/MainLayout'
@@ -13,12 +13,21 @@ import PublicationDetailPage from '@/pages/PublicationDetailPage'
 import PublicationEditPage from '@/pages/PublicationEditPage'
 import GeneticPage from '@/pages/GeneticPage'
 import ProfilePage from '@/pages/ProfilePage'
+import MetaConnectPage from '@/pages/MetaConnectPage'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, token } = useAuthStore()
   if (!token) return <Navigate to="/login" replace />
   return <>{children}</>
+}
+
+function IndexRedirect() {
+  const [searchParams] = useSearchParams()
+  if (searchParams.get("oauth")) {
+    return <Navigate to={`/settings/meta-connect?${searchParams.toString()}`} replace />
+  }
+  return <Navigate to="/dashboard" replace />
 }
 
 export default function App() {
@@ -33,7 +42,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route index element={<IndexRedirect />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="campaigns" element={<CampaignsPage />} />
           <Route path="campaigns/new" element={<CampaignNewPage />} />
@@ -43,6 +52,7 @@ export default function App() {
           <Route path="publications/:publicationId" element={<PublicationDetailPage />} />
           <Route path="publications/:publicationId/edit" element={<PublicationEditPage />} />
           <Route path="genetic" element={<GeneticPage />} />
+          <Route path="settings/meta-connect" element={<MetaConnectPage />} />
           <Route path="profile" element={<ProfilePage />} />
         </Route>
       </Routes>
