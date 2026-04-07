@@ -29,7 +29,15 @@ export default api
 // PUBLISHING SERVICE
 // ========================
 import { ENDPOINTS } from "./endpoints"
-import type { AdAccount, PaginatedResponse, Publication, PublishRequest } from "@/types"
+import type {
+  AdAccount,
+  MetricListResponse,
+  MetricsSummary,
+  PaginatedResponse,
+  Publication,
+  PublishRequest,
+  TopPerformer,
+} from "@/types"
 
 export const getMetaLoginUrl = () =>
   api.get<{ login_url: string }>(ENDPOINTS.publish.metaLoginUrl)
@@ -68,3 +76,23 @@ export const verifyAdAccount = (id: string) =>
     scopes?: string[]
     needs_reauth?: boolean
   }>(`${ENDPOINTS.publish.adAccountDetail(id)}/verify`)
+
+// ========================
+// ANALYTICS SERVICE
+// ========================
+export const getMetricsSummary = () =>
+  api.get<MetricsSummary>(ENDPOINTS.metrics.summary)
+
+export const getCampaignMetrics = (
+  campaignId: string,
+  params?: { from_date?: string; to_date?: string }
+) => api.get<MetricListResponse>(ENDPOINTS.metrics.byCampaign(campaignId), { params })
+
+export const getTopPerformers = () =>
+  api.get<TopPerformer[]>(ENDPOINTS.metrics.topPerformers)
+
+export const getUnderperformers = () =>
+  api.get<TopPerformer[]>(ENDPOINTS.metrics.underperformers)
+
+export const triggerMetricsCollection = (lookbackDays: number = 7) =>
+  api.post(ENDPOINTS.metrics.collect, { lookback_days: lookbackDays })

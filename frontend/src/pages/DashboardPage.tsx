@@ -7,6 +7,8 @@ import {
   Eye,
   MousePointerClick,
   Clock,
+  TrendingUp,
+  BarChart3,
 } from "lucide-react"
 import api from "@/lib/api"
 import { ENDPOINTS } from "@/lib/endpoints"
@@ -20,6 +22,8 @@ import {
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusBadge } from "@/components/StatusBadge"
+import { useTopPerformers } from "@/hooks/useAnalytics"
+import { formatPercent, formatROAS } from "@/lib/utils"
 import type {
   MetricsSummary,
   Campaign,
@@ -79,6 +83,8 @@ export default function DashboardPage() {
     retry: false,
   })
 
+  const topPerformersQuery = useTopPerformers()
+
   const optimizeQuery = useQuery<OptimizationRun[]>({
     queryKey: ["optimize-recent"],
     queryFn: () =>
@@ -132,6 +138,70 @@ export default function DashboardPage() {
           loading={sLoading}
         />
       </div>
+
+      {/* Top 3 Performers + View All Analytics */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-green-600" />
+            <CardTitle>Top Performers</CardTitle>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate("/analytics")}
+          >
+            <BarChart3 className="mr-2 h-4 w-4" />
+            Ver Analytics
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {topPerformersQuery.isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : !topPerformersQuery.data?.length ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              Sin datos de rendimiento aún
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="pb-2 font-medium">Campaña</th>
+                    <th className="pb-2 font-medium text-right">CTR</th>
+                    <th className="pb-2 font-medium text-right">ROAS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topPerformersQuery.data.slice(0, 3).map((item) => (
+                    <tr
+                      key={item.campaign_id}
+                      className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() =>
+                        navigate(`/campaigns/${item.campaign_id}`)
+                      }
+                    >
+                      <td className="py-3 font-medium font-mono text-xs">
+                        {item.campaign_id.slice(0, 8)}...
+                      </td>
+                      <td className="py-3 text-right text-green-600">
+                        {formatPercent(item.ctr)}
+                      </td>
+                      <td className="py-3 text-right text-green-600">
+                        {formatROAS(item.roas)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Recent campaigns */}
       <Card>

@@ -30,5 +30,11 @@ celery_app.conf.update(
             "schedule": crontab(hour=3, minute=0),
             "options": {"queue": "token_refresh_tasks"},
         },
+        "collect-metrics-every-6-hours": {
+            "task": "tasks.analytics_collect",
+            "schedule": crontab(hour="*/6", minute=0),
+            "args": [7],
+            "options": {"queue": "analytics_tasks"},
+        },
     },
 )

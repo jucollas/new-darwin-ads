@@ -11,6 +11,7 @@ import CampaignEditPage from '@/pages/CampaignEditPage'
 import PublicationNewPage from '@/pages/PublicationNewPage'
 import PublicationDetailPage from '@/pages/PublicationDetailPage'
 import PublicationEditPage from '@/pages/PublicationEditPage'
+import AnalyticsPage from '@/pages/AnalyticsPage'
 import GeneticPage from '@/pages/GeneticPage'
 import ProfilePage from '@/pages/ProfilePage'
 import MetaConnectPage from '@/pages/MetaConnectPage'
@@ -51,6 +52,7 @@ export default function App() {
           <Route path="publications/new/:campaignId" element={<PublicationNewPage />} />
           <Route path="publications/:publicationId" element={<PublicationDetailPage />} />
           <Route path="publications/:publicationId/edit" element={<PublicationEditPage />} />
+          <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="genetic" element={<GeneticPage />} />
           <Route path="settings/meta-connect" element={<MetaConnectPage />} />
           <Route path="profile" element={<ProfilePage />} />

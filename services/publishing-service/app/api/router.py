@@ -327,6 +327,37 @@ async def delete_publication(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/internal/publications", include_in_schema=False)
+async def list_publications_internal(
+    status: str = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint for cross-service queries. NO JWT required."""
+    from sqlalchemy import select
+    from app.models.publishing import Publication
+
+    stmt = select(Publication)
+    if status:
+        stmt = stmt.where(Publication.status == status)
+    stmt = stmt.limit(500)
+
+    result = await db.execute(stmt)
+    publications = result.scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(p.id),
+                "campaign_id": str(p.campaign_id),
+                "meta_ad_id": p.meta_ad_id,
+                "meta_campaign_id": p.meta_campaign_id,
+                "status": p.status,
+            }
+            for p in publications
+        ],
+        "total": len(publications),
+    }
+
+
 @router.put("/internal/{publication_id}/status", include_in_schema=False)
 async def update_publication_status_internal(
     publication_id: str,

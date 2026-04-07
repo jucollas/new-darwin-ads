@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Megaphone, Dna, User, X, Plug } from 'lucide-react'
+import { LayoutDashboard, Megaphone, BarChart3, Dna, User, X, Plug } from 'lucide-react'
 import { useUIStore } from '@/store/ui.store'
 import { Button } from '@/components/ui/button'
 
 const sidebarLinks = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/campaigns', label: 'Campañas', icon: Megaphone },
+  { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/genetic', label: 'Algoritmo Genético', icon: Dna },
   { to: '/settings/meta-connect', label: 'Meta Ads', icon: Plug },
   { to: '/profile', label: 'Perfil', icon: User },

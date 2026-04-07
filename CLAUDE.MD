@@ -5,6 +5,54 @@ You are a senior Python backend developer working on AdGen AI, a microservices-b
 
 ---
 
+## MVP SCOPE — SINGLE-USER MODE
+
+> **This project is currently an MVP targeting a single user (the developer/owner).**
+> All external service connections (Meta Ads, Google Vertex AI, Google Cloud Storage) are configured with the owner's personal credentials via environment variables. There is NO multi-user OAuth flow, NO per-user token storage for external services, and NO multi-tenant isolation for external APIs in the MVP phase.
+
+### What this means in practice:
+
+- **JWT authentication is kept** — the API still validates JWTs and extracts `user_id`. This preserves the multi-user-ready architecture without adding complexity. In MVP, there is only one user issuing requests.
+- **Meta access token** is a single long-lived token stored in `META_ACCESS_TOKEN` env var — NOT in the `ad_accounts` database table. No OAuth callback flow is needed.
+- **Meta Ad Account ID** is a single value in `META_AD_ACCOUNT_ID` env var. No account selection UI needed.
+- **Meta Page ID** is a single value in `META_PAGE_ID` env var.
+- **WhatsApp number** is a single value in `META_WHATSAPP_NUMBER` env var.
+- **Google Cloud credentials** use `GOOGLE_APPLICATION_CREDENTIALS` (service account JSON) — already configured in previous phases.
+- **All services that need Meta credentials** read them from env vars directly instead of querying the `ad_accounts` table.
+- **The `ad_accounts` table and OAuth endpoints still exist** from Phase 4 but are NOT used in the MVP flow. They remain in the codebase for future multi-user expansion.
+
+### MVP-to-Multi-User migration path (future):
+When ready to support multiple users, the changes are isolated:
+1. Re-enable OAuth flow in publishing-service (already built in Phase 4)
+2. Switch services from reading `META_ACCESS_TOKEN` env var to querying `ad_accounts` table by `user_id`
+3. Add per-user `FacebookAdsApi` instance creation (pattern already exists in `meta_ads_service.py`)
+4. Add account selection UI in frontend
+
+**Convention:** Code that reads MVP env vars should be wrapped in a helper function (e.g., `get_meta_credentials()`) so the migration to multi-user is a single function change per service, not a scattered refactor.
+
+```python
+# shared/utils/meta_credentials.py
+# MVP: reads from env vars. Future: query ad_accounts table by user_id.
+from app.config import settings
+
+def get_meta_credentials(user_id: str | None = None) -> dict:
+    """
+    MVP: Returns owner's Meta credentials from environment variables.
+    Future multi-user: Will query ad_accounts table by user_id.
+    
+    The user_id parameter is accepted but ignored in MVP mode,
+    ensuring all call sites are already multi-user-ready.
+    """
+    return {
+        "access_token": settings.META_ACCESS_TOKEN,
+        "ad_account_id": settings.META_AD_ACCOUNT_ID,
+        "page_id": settings.META_PAGE_ID,
+        "whatsapp_number": settings.META_WHATSAPP_NUMBER,
+    }
+```
+
+---
+
 ## PROJECT OVERVIEW
 
 AdGen AI automates the creation and optimization of paid social media ads:
@@ -84,7 +132,8 @@ Internet → Traefik (ports 80/443)
 | analytics_tasks      | analytics-service            | Celery Beat every 6 hours        |
 | genetic_tasks        | genetic-algorithm-service    | Celery Beat every 24 hours       |
 | notification_tasks   | notification-service         | Any service dispatches event     |
-| token_refresh_tasks  | publishing-service           | Celery Beat every 24 hours — checks tokens approaching 45-day mark and refreshes them |
+
+> **MVP simplification:** The `token_refresh_tasks` queue is **not needed** in MVP. The single Meta token is managed manually via env var. This queue will be re-added when multi-user support is implemented.
 
 ---
 
@@ -155,19 +204,22 @@ class Proposal(Base):
 
 #### publishing_schema (publishing-service)
 
+> **MVP note:** The `ad_accounts` table exists but is NOT used in the MVP flow. Meta credentials come from env vars via `get_meta_credentials()`. The table remains for future multi-user support.
+
 ```python
 class AdAccount(Base):
+    """MVP: NOT USED — credentials come from env vars. Kept for multi-user migration."""
     __tablename__ = "ad_accounts"
     __table_args__ = {"schema": "publishing_schema"}
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(index=True)
-    meta_ad_account_id: Mapped[str]                    # Format: "act_123456789"
+    meta_ad_account_id: Mapped[str]
     meta_page_id: Mapped[str]
     meta_business_id: Mapped[str | None] = mapped_column(default=None)
-    whatsapp_phone_number: Mapped[str | None] = mapped_column(default=None)  # E.164 format, e.g. "+573001234567"
-    access_token_encrypted: Mapped[str]                # Fernet-encrypted long-lived token
-    token_expires_at: Mapped[datetime | None] = mapped_column(default=None)  # None = non-expiring (System User or Marketing API Standard Access)
+    whatsapp_phone_number: Mapped[str | None] = mapped_column(default=None)
+    access_token_encrypted: Mapped[str]
+    token_expires_at: Mapped[datetime | None] = mapped_column(default=None)
     token_scopes: Mapped[list] = mapped_column(JSON, default=["ads_management", "ads_read"])
     token_last_verified_at: Mapped[datetime | None] = mapped_column(default=None)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -179,23 +231,24 @@ class Publication(Base):
     __table_args__ = {"schema": "publishing_schema"}
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    campaign_id: Mapped[uuid.UUID] = mapped_column(index=True)  # NO ForeignKey — cross-service reference
-    proposal_id: Mapped[uuid.UUID]                                # NO ForeignKey — cross-service reference
-    ad_account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("publishing_schema.ad_accounts.id"))
+    campaign_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    proposal_id: Mapped[uuid.UUID]
+    # MVP: ad_account_id is nullable since we don't use the ad_accounts table
+    ad_account_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     meta_campaign_id: Mapped[str | None] = mapped_column(default=None)
     meta_adset_id: Mapped[str | None] = mapped_column(default=None)
-    meta_adcreative_id: Mapped[str | None] = mapped_column(default=None)  # Full hierarchy: Campaign → Ad Set → Ad Creative → Ad
+    meta_adcreative_id: Mapped[str | None] = mapped_column(default=None)
     meta_ad_id: Mapped[str | None] = mapped_column(default=None)
-    meta_image_hash: Mapped[str | None] = mapped_column(default=None)      # Image hash returned by Meta after upload
-    special_ad_categories: Mapped[list] = mapped_column(JSON, default=[])  # REQUIRED by Meta even if empty
-    destination_type: Mapped[str] = mapped_column(default="WHATSAPP")      # WHATSAPP | WEBSITE | APP
-    campaign_objective: Mapped[str] = mapped_column(default="OUTCOME_ENGAGEMENT")  # ODAX objectives only
+    meta_image_hash: Mapped[str | None] = mapped_column(default=None)
+    special_ad_categories: Mapped[list] = mapped_column(JSON, default=[])
+    destination_type: Mapped[str] = mapped_column(default="WHATSAPP")
+    campaign_objective: Mapped[str] = mapped_column(default="OUTCOME_ENGAGEMENT")
     status: Mapped[str] = mapped_column(default="queued")
     # Valid statuses: queued | publishing | active | paused | failed
-    budget_daily_cents: Mapped[int]                                         # Budget in smallest currency unit (cents/centavos)
+    budget_daily_cents: Mapped[int]
     published_at: Mapped[datetime | None] = mapped_column(default=None)
     error_message: Mapped[str | None] = mapped_column(default=None)
-    error_code: Mapped[int | None] = mapped_column(default=None)           # Meta API error code (e.g., 190, 100, 17)
+    error_code: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=text("NOW()"))
 ```
 
@@ -264,9 +317,10 @@ class Notification(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(index=True)
     type: Mapped[str]
-    # Valid types: proposals_ready | image_ready | campaign_published | campaign_failed | optimization_complete | budget_alert | token_expiring
+    # Valid types: proposals_ready | image_ready | campaign_published | campaign_failed | optimization_complete | budget_alert
+    # MVP: removed token_expiring (no multi-user token management)
     channel: Mapped[str] = mapped_column(default="in_app")
-    # Valid channels: in_app | email | whatsapp
+    # MVP: only in_app channel. Future: email | whatsapp
     title: Mapped[str]
     body: Mapped[str]
     metadata: Mapped[dict] = mapped_column(JSON, default={})
@@ -303,34 +357,6 @@ class Notification(Base):
 | POST   | /generate/mutate      | Mutate existing proposal (for genetic algo)    | Internal|
 | GET    | /health               | Health check                                   | None    |
 
-**Request body for /generate/proposals:**
-```json
-{
-  "user_prompt": "Quiero vender zapatos deportivos para mujeres de 25-35 años en Colombia",
-  "business_context": {
-    "business_name": "ZapaFit",
-    "industry": "fashion",
-    "whatsapp_number": "+573001234567"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "proposals": [
-    {
-      "copy_text": "...",
-      "script": "...",
-      "image_prompt": "...",
-      "target_audience": {"age_min": 25, "age_max": 35, "genders": ["female"], "interests": ["fitness", "running"], "locations": ["CO"]},
-      "cta_type": "whatsapp_chat",
-      "whatsapp_number": "+573001234567"
-    }
-  ]
-}
-```
-
 ### image-generation-service (port 8003, prefix: /api/v1/images)
 
 | Method | Path                 | Description                          | Auth    |
@@ -340,47 +366,25 @@ class Notification(Base):
 | DELETE | /{image_id}          | Delete image from storage            | Internal|
 | GET    | /health              | Health check                         | None    |
 
-**Request body for /generate:**
-```json
-{
-  "prompt": "Modern athletic shoes for women, vibrant colors, clean white background, professional product photography",
-  "aspect_ratio": "1:1",
-  "campaign_id": "uuid",
-  "proposal_id": "uuid"
-}
-```
-
 ### publishing-service (port 8004, prefix: /api/v1/publish)
+
+> **MVP simplification:** OAuth endpoints (`/auth/meta/login`, `/auth/meta/callback`) and ad account CRUD (`/ad-accounts/*`) exist from Phase 4 but are **not used** in the MVP flow. The publish endpoint reads Meta credentials from env vars.
 
 | Method | Path                          | Description                                          | Auth |
 |--------|-------------------------------|------------------------------------------------------|------|
-| GET    | /auth/meta/login              | Redirect user to Meta OAuth authorization dialog     | JWT  |
-| GET    | /auth/meta/callback           | OAuth callback — exchange code for long-lived token   | JWT  |
-| POST   | /ad-accounts                  | Register Meta Ads account (manual token entry)       | JWT  |
-| GET    | /ad-accounts                  | List user's ad accounts                              | JWT  |
-| GET    | /ad-accounts/{id}/verify      | Verify token health (detect error 190)               | JWT  |
-| DELETE | /ad-accounts/{id}             | Disconnect ad account                                | JWT  |
-| POST   | /                             | Create full ad in Meta Ads (Campaign → AdSet → Creative → Ad) | JWT |
+| ~~GET~~    | ~~/auth/meta/login~~              | ~~OAuth redirect~~ **(MVP: unused, kept for future)**    | -    |
+| ~~GET~~    | ~~/auth/meta/callback~~           | ~~OAuth callback~~ **(MVP: unused, kept for future)**    | -    |
+| ~~POST~~   | ~~/ad-accounts~~                  | ~~Register ad account~~ **(MVP: unused)**                | -    |
+| ~~GET~~    | ~~/ad-accounts~~                  | ~~List ad accounts~~ **(MVP: unused)**                   | -    |
+| ~~GET~~    | ~~/ad-accounts/{id}/verify~~      | ~~Verify token~~ **(MVP: unused)**                       | -    |
+| ~~DELETE~~ | ~~/ad-accounts/{id}~~             | ~~Disconnect account~~ **(MVP: unused)**                 | -    |
+| POST   | /                             | Create full ad in Meta Ads (uses env var credentials)| JWT  |
 | GET    | /publications                 | List user's publications                             | JWT  |
 | GET    | /publications/{id}/status     | Get current ad status from Meta                      | JWT  |
 | POST   | /publications/{id}/pause      | Pause ad in Meta                                     | JWT  |
 | POST   | /publications/{id}/resume     | Resume ad in Meta                                    | JWT  |
 | DELETE | /publications/{id}            | Delete ad from Meta (archive, irreversible)          | JWT  |
 | GET    | /health                       | Health check                                         | None |
-
-**OAuth flow details:**
-1. `GET /auth/meta/login` — Generates CSRF `state`, redirects to `https://www.facebook.com/v25.0/dialog/oauth` with scopes: `ads_management,ads_read,business_management,pages_manage_ads,pages_read_engagement,pages_show_list,whatsapp_business_management,whatsapp_business_messaging`
-2. `GET /auth/meta/callback` — Validates `state`, exchanges `code` for short-lived token, exchanges for long-lived token, fetches user's ad accounts via `/me/adaccounts`, stores encrypted token + account data
-3. Long-lived tokens with Marketing API Standard Access are **non-expiring** but can be invalidated (password change, app deauthorization, suspicious activity). Celery Beat checks token health daily and refreshes at 45-day mark as a precaution.
-
-**Campaign creation flow (POST /):**
-The publishing service creates the full Meta Ads hierarchy in order using the `facebook-business` SDK:
-1. Upload image to Meta (returns `image_hash`)
-2. Create Campaign (with `special_ad_categories`, `objective`, `status: PAUSED`)
-3. Create Ad Set (with targeting, budget in cents, `destination_type: WHATSAPP`, `promoted_object`)
-4. Create Ad Creative (with `object_story_spec`, `page_welcome_message`, CTA `WHATSAPP_MESSAGE`)
-5. Create Ad (links creative to ad set)
-6. Activate all objects (set status to `ACTIVE`)
 
 ### analytics-service (port 8005, prefix: /api/v1/metrics)
 
@@ -393,6 +397,8 @@ The publishing service creates the full Meta Ads hierarchy in order using the `f
 | POST   | /collect                      | Manual trigger for metric collection     | JWT  |
 | GET    | /health                       | Health check                             | None |
 
+> **MVP note:** The analytics service uses `get_meta_credentials()` to get the single Meta access token for Insights API calls. No need to look up per-user tokens.
+
 ### genetic-algorithm-service (port 8006, prefix: /api/v1/optimize)
 
 | Method | Path                          | Description                        | Auth |
@@ -404,6 +410,8 @@ The publishing service creates the full Meta Ads hierarchy in order using the `f
 | GET    | /config                       | Get current config                 | JWT  |
 | GET    | /health                       | Health check                       | None |
 
+> **MVP note:** The genetic algorithm evaluates ALL published campaigns (single user = all campaigns belong to one user). No per-user filtering complexity needed, but `user_id` is still stored in `OptimizationRun` and `GeneticConfig` for future multi-user compatibility.
+
 ### notification-service (port 8007, prefix: /api/v1/notifications)
 
 | Method | Path                          | Description                        | Auth |
@@ -413,6 +421,8 @@ The publishing service creates the full Meta Ads hierarchy in order using the `f
 | PUT    | /read-all                     | Mark all as read                   | JWT  |
 | GET    | /unread-count                 | Count of unread notifications      | JWT  |
 | GET    | /health                       | Health check                       | None |
+
+> **MVP note:** Only `in_app` channel is implemented. No email (SendGrid) or WhatsApp notification delivery. The `channel` field defaults to `in_app` and no other channels are processed.
 
 ---
 
@@ -443,6 +453,7 @@ adgen-ai/
 │   └── utils/
 │       ├── __init__.py
 │       ├── http_client.py             # Async httpx client for inter-service communication
+│       ├── meta_credentials.py        # MVP: Meta credentials from env vars (future: per-user from DB)
 │       └── logger.py                  # Structured logging setup (structlog or loguru)
 │
 ├── services/
@@ -492,19 +503,19 @@ adgen-ai/
 │   ├── publishing-service/
 │   │   └── app/
 │   │       ├── api/
-│   │       │   ├── router.py          # All publish endpoints + OAuth routes
+│   │       │   ├── router.py          # Publish endpoints (MVP: OAuth routes exist but unused)
 │   │       │   └── dependencies.py
 │   │       ├── services/
-│   │       │   ├── meta_ads_service.py    # facebook-business SDK wrapper — creates per-user FacebookAdsApi instances
-│   │       │   ├── meta_oauth_service.py  # OAuth flow: login redirect, callback, token exchange
-│   │       │   ├── token_manager.py       # Token health checks, refresh logic, error 190 detection
-│   │       │   └── token_encryption.py    # Fernet encrypt/decrypt for Meta access tokens
+│   │       │   ├── meta_ads_service.py    # facebook-business SDK wrapper — MVP: uses env var token
+│   │       │   ├── meta_oauth_service.py  # OAuth flow (MVP: unused, kept for future)
+│   │       │   ├── token_manager.py       # Token health checks (MVP: unused, kept for future)
+│   │       │   └── token_encryption.py    # Fernet encrypt/decrypt (MVP: unused, kept for future)
 │   │       └── tasks/
-│   │           └── celery_tasks.py        # publish_tasks + token_refresh_tasks
+│   │           └── celery_tasks.py        # publish_tasks only (MVP: no token_refresh_tasks)
 │   │
 │   ├── analytics-service/
 │   │   └── app/services/
-│   │       └── meta_insights_service.py
+│   │       └── meta_insights_service.py   # MVP: uses get_meta_credentials() for single token
 │   │
 │   ├── genetic-algorithm-service/
 │   │   └── app/services/
@@ -515,8 +526,8 @@ adgen-ai/
 │   │
 │   └── notification-service/
 │       └── app/services/
-│           ├── email_sender.py        # SendGrid integration
-│           └── in_app.py              # Store notification in DB
+│           └── in_app.py              # Store notification in DB (MVP: only channel)
+│           # MVP: no email_sender.py — SendGrid integration deferred to multi-user phase
 ```
 
 ---
@@ -618,6 +629,89 @@ async def get_db() -> AsyncSession:
             await session.close()
 ```
 
+### Meta Credentials Helper (MVP pattern)
+```python
+# shared/utils/meta_credentials.py
+from dataclasses import dataclass
+
+@dataclass
+class MetaCredentials:
+    access_token: str
+    ad_account_id: str
+    page_id: str
+    whatsapp_number: str
+
+def get_meta_credentials(user_id: str | None = None) -> MetaCredentials:
+    """
+    MVP: Returns owner's Meta credentials from environment variables.
+    Future multi-user: Will query ad_accounts table by user_id and decrypt token.
+    
+    The user_id parameter is accepted but ignored in MVP mode,
+    ensuring all call sites are already multi-user-ready.
+    """
+    import os
+    return MetaCredentials(
+        access_token=os.environ["META_ACCESS_TOKEN"],
+        ad_account_id=os.environ["META_AD_ACCOUNT_ID"],
+        page_id=os.environ["META_PAGE_ID"],
+        whatsapp_number=os.environ["META_WHATSAPP_NUMBER"],
+    )
+```
+
+### Meta Ads SDK Pattern — MVP (publishing-service)
+```python
+# app/services/meta_ads_service.py
+from facebook_business.api import FacebookAdsApi
+from facebook_business.session import FacebookSession
+from facebook_business.adobjects.adaccount import AdAccount
+from facebook_business.adobjects.campaign import Campaign
+from facebook_business.adobjects.adset import AdSet
+from facebook_business.adobjects.adcreative import AdCreative
+from facebook_business.adobjects.ad import Ad
+from facebook_business.adobjects.adimage import AdImage
+from app.config import settings
+from shared.utils.meta_credentials import get_meta_credentials
+
+class MetaAdsService:
+    """
+    MVP: Creates a single FacebookAdsApi instance using env var credentials.
+    Future multi-user: Will accept access_token parameter for per-user instances.
+    """
+
+    def __init__(self, user_id: str | None = None):
+        creds = get_meta_credentials(user_id)
+        session = FacebookSession(
+            app_id=settings.META_APP_ID,
+            app_secret=settings.META_APP_SECRET,
+            access_token=creds.access_token,
+        )
+        self.api = FacebookAdsApi(session)
+        self.ad_account_id = creds.ad_account_id
+        self.page_id = creds.page_id
+        self.whatsapp_number = creds.whatsapp_number
+
+    def create_whatsapp_campaign(
+        self,
+        name: str,
+        copy_text: str,
+        image_path: str,
+        target_audience: dict,
+        daily_budget_cents: int,
+        welcome_message: str = "Welcome! How can we help you today?",
+    ) -> dict:
+        """
+        Creates complete Meta Ads hierarchy for WhatsApp Click-to-Chat.
+        MVP: Uses self.ad_account_id, self.page_id, self.whatsapp_number from env vars.
+        """
+        # 1. Upload image → image_hash
+        # 2. Create Campaign (objective=OUTCOME_ENGAGEMENT, special_ad_categories=[])
+        # 3. Create AdSet (destination_type=WHATSAPP, promoted_object with page_id + whatsapp_number)
+        # 4. Create AdCreative (CTA=WHATSAPP_MESSAGE, page_welcome_message)
+        # 5. Create Ad (link creative to adset)
+        # Returns dict with all Meta IDs
+        ...
+```
+
 ### Pydantic Schemas Pattern
 ```python
 # app/schemas/campaign.py
@@ -685,52 +779,6 @@ class CampaignService:
         # ... pagination logic
         result = await self.db.execute(stmt)
         return result.scalars().all(), total
-```
-
-### Meta Ads SDK Pattern (publishing-service)
-```python
-# app/services/meta_ads_service.py
-from facebook_business.api import FacebookAdsApi
-from facebook_business.session import FacebookSession
-from facebook_business.adobjects.adaccount import AdAccount
-from facebook_business.adobjects.campaign import Campaign
-from facebook_business.adobjects.adset import AdSet
-from facebook_business.adobjects.adcreative import AdCreative
-from facebook_business.adobjects.ad import Ad
-from facebook_business.adobjects.adimage import AdImage
-from app.config import settings
-
-class MetaAdsService:
-    """Creates per-user FacebookAdsApi instances for multi-tenant operation."""
-
-    def __init__(self, access_token: str):
-        session = FacebookSession(
-            app_id=settings.META_APP_ID,
-            app_secret=settings.META_APP_SECRET,
-            access_token=access_token,
-        )
-        self.api = FacebookAdsApi(session)
-
-    def create_whatsapp_campaign(
-        self,
-        ad_account_id: str,
-        page_id: str,
-        name: str,
-        copy_text: str,
-        image_path: str,
-        target_audience: dict,
-        whatsapp_number: str,
-        daily_budget_cents: int,
-        welcome_message: str = "Welcome! How can we help you today?",
-    ) -> dict:
-        """Creates complete Meta Ads hierarchy for WhatsApp Click-to-Chat."""
-        # 1. Upload image → image_hash
-        # 2. Create Campaign (objective=OUTCOME_ENGAGEMENT, special_ad_categories=[])
-        # 3. Create AdSet (destination_type=WHATSAPP, promoted_object with page_id + whatsapp_number)
-        # 4. Create AdCreative (CTA=WHATSAPP_MESSAGE, page_welcome_message)
-        # 5. Create Ad (link creative to adset)
-        # Returns dict with all Meta IDs: {meta_campaign_id, meta_adset_id, meta_adcreative_id, meta_ad_id, meta_image_hash}
-        ...
 ```
 
 ### Router Pattern
@@ -908,25 +956,28 @@ GOOGLE_CLOUD_LOCATION=us-central1
 GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-key.json
 GCS_BUCKET_NAME=adgen-images
 
-# Meta Ads — Publishing Service
+# Meta Ads — MVP Single-User (direct credentials, no OAuth flow)
 META_APP_ID=your-app-id
 META_APP_SECRET=your-app-secret
 META_API_VERSION=v25.0
-META_GRAPH_API_BASE_URL=https://graph.facebook.com
-META_REDIRECT_URI=https://your-domain.com/api/v1/publish/auth/meta/callback
-META_TOKEN_ENCRYPTION_KEY=your-fernet-key-here
-# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-META_SANDBOX_AD_ACCOUNT_ID=act_sandbox_123456789
-# Sandbox account for testing without spending real money (Marketing API → Tools in app dashboard)
-WHATSAPP_BUSINESS_ACCOUNT_ID=your-waba-id
+META_ACCESS_TOKEN=your-long-lived-access-token
+META_AD_ACCOUNT_ID=act_123456789
+META_PAGE_ID=your-page-id
+META_WHATSAPP_NUMBER=+573001234567
 META_DEFAULT_CURRENCY=COP
 META_DEFAULT_BID_STRATEGY=LOWEST_COST_WITHOUT_CAP
 META_DEFAULT_BILLING_EVENT=IMPRESSIONS
 META_DEFAULT_OPTIMIZATION_GOAL=CONVERSATIONS
 META_DEFAULT_CAMPAIGN_OBJECTIVE=OUTCOME_ENGAGEMENT
 
-# Notifications
-SENDGRID_API_KEY=SG.xxx
+# Meta Ads — Multi-User (UNUSED IN MVP, kept for future)
+# META_REDIRECT_URI=https://your-domain.com/api/v1/publish/auth/meta/callback
+# META_TOKEN_ENCRYPTION_KEY=your-fernet-key-here
+# META_SANDBOX_AD_ACCOUNT_ID=act_sandbox_123456789
+# WHATSAPP_BUSINESS_ACCOUNT_ID=your-waba-id
+
+# Notifications — MVP: only in_app
+# SENDGRID_API_KEY=SG.xxx  # UNUSED IN MVP
 
 # General
 DEBUG=true
@@ -956,13 +1007,14 @@ ENVIRONMENT=development
 - NEVER log tokens, passwords, or API keys
 - ALWAYS validate JWT on every endpoint except /health
 - ALWAYS check that the resource belongs to the current user (user_id from JWT)
-- Encrypt Meta access tokens before storing in DB (Fernet symmetric encryption via META_TOKEN_ENCRYPTION_KEY)
+- MVP: Meta access token is in env vars (acceptable for single-user). Future: encrypt before DB storage.
 
 ### Testing:
 - Use pytest with pytest-asyncio
 - Use httpx.AsyncClient for endpoint testing
 - Mock external APIs (OpenAI, Google, Meta) — never call real APIs in tests
 - Mock the `facebook-business` SDK in tests — use `unittest.mock.patch` on SDK classes
+- Mock `get_meta_credentials()` in tests — return fake credentials
 - Each service has its own test suite
 - Minimum: test happy path + error cases for every endpoint
 
@@ -973,17 +1025,15 @@ ENVIRONMENT=development
 
 ### Meta Marketing API:
 - **ALWAYS use the `facebook-business` Python SDK** — never raw httpx calls to Graph API
-- **ALWAYS create per-user `FacebookAdsApi` instances** via `FacebookSession` for multi-tenant isolation — never use the global `FacebookAdsApi.init()` in production code
-- **ALWAYS set `special_ad_categories`** on campaign creation, even if empty (`[]`) — omitting it causes immediate ad rejection
-- **ALL budget values are in the smallest currency unit** (cents for USD, centavos for COP). `daily_budget: 1000` = $10.00. Double-check to avoid 100x over/underspend.
-- **ALWAYS pin API version** (`api_version="v25.0"`) — deprecated versions fail completely with no graceful fallback
-- **Handle error code 190 (OAuthException)** on every SDK call — detect invalidated tokens and flag user for re-authentication
-- **Handle error codes 17/613 (rate limit)** with exponential backoff — Development tier has only 60 points / 300s block
+- **MVP: Use single `FacebookAdsApi` instance** from env var token via `get_meta_credentials()`. Future: per-user instances via `FacebookSession`.
+- **ALWAYS set `special_ad_categories`** on campaign creation, even if empty (`[]`)
+- **ALL budget values are in the smallest currency unit** (cents for USD, centavos for COP)
+- **ALWAYS pin API version** (`api_version="v25.0"`)
+- **Handle error code 190 (OAuthException)** — in MVP, log and alert (token must be manually refreshed in .env)
+- **Handle error codes 17/613 (rate limit)** with exponential backoff
 - **WhatsApp ads require**: `destination_type="WHATSAPP"`, `promoted_object` with `page_id` + `whatsapp_phone_number`, CTA type `WHATSAPP_MESSAGE`, link `https://api.whatsapp.com/send`
 - **ODAX objectives only**: `OUTCOME_ENGAGEMENT` (default for WhatsApp), `OUTCOME_LEADS`, `OUTCOME_SALES`, `OUTCOME_TRAFFIC`
-- **Use Sandbox Ad Account** (`META_SANDBOX_AD_ACCOUNT_ID`) for all development and testing — ads are created but never delivered, insights return simulated data
 - **Interest targeting IDs** must be resolved via the Targeting Search API (`TargetingSearch.search`) — never hardcode interest IDs
-- **Expect up to 3% data variance** between API insights and Ads Manager UI — this is a confirmed known issue
 
 ---
 
@@ -1002,31 +1052,67 @@ GPT integration for proposal generation. Real OpenAI GPT-4o-mini calls with retr
 Google Imagen 3 (Vertex AI) integration for ad image generation. Images uploaded to GCS public bucket. Full async flow: user selects proposal → Celery dispatches image_generate task → Imagen 3 generates image → uploaded to GCS → proposal.image_url updated → campaign status set to image_ready → frontend polls and displays image.
 
 ### FASE 4 — Publishing Service [COMPLETED]
-Meta Marketing API v25.0 integration using the official `facebook-business` Python SDK (v25.0.0).
+Meta Marketing API v25.0 integration using the official `facebook-business` Python SDK (v25.0.0). Full Meta Ads hierarchy creation, OAuth flow (built but unused in MVP), token management infrastructure (built but unused in MVP). See Phase 4 details in architecture sections above.
 
-**Scope:**
-- **OAuth flow**: Meta authorization dialog → code exchange → long-lived token storage (Fernet-encrypted). Scopes: `ads_management`, `ads_read`, `business_management`, `pages_manage_ads`, `pages_read_engagement`, `pages_show_list`.
-- **Ad Account management**: CRUD for user's linked Meta ad accounts with token health verification.
-- **Token lifecycle**: Celery Beat daily task checks `token_expires_at`, refreshes tokens approaching 45-day mark via `fb_exchange_token` endpoint, detects error code 190 on API calls and flags accounts for re-auth, dispatches `token_expiring` notification.
-- **Campaign creation**: Full Meta Ads hierarchy via SDK — Campaign → Ad Set → Ad Creative → Ad. Per-user `FacebookAdsApi` instances via `FacebookSession` for multi-tenant isolation.
-- **WhatsApp Click-to-Chat ads**: `destination_type=WHATSAPP`, `promoted_object` with `page_id` + `whatsapp_phone_number`, CTA `WHATSAPP_MESSAGE`, `page_welcome_message` with autofill messages and icebreakers.
-- **ODAX objectives only**: `OUTCOME_ENGAGEMENT` (default), `OUTCOME_LEADS`, `OUTCOME_SALES`, `OUTCOME_TRAFFIC`.
-- **Fernet encryption** for stored access tokens via `META_TOKEN_ENCRYPTION_KEY`.
-- **Error handling**: Map Meta error codes (190=token invalid, 17/613=rate limit, 100=invalid param, 275=missing permission, 1487901=validation with `blame_field_specs`) to appropriate HTTP responses and retry logic.
-- **Sandbox-first development**: All dev/test against `META_SANDBOX_AD_ACCOUNT_ID` — ads created but never delivered.
-- **Pause/resume/delete**: Map to Meta's `PAUSED`/`ACTIVE`/`ARCHIVED` statuses via SDK `api_update`.
+### FASE 5 — Analytics Service [COMPLETED]
+**MVP scope:** Meta Insights API metrics collection for the single owner account.
 
-### FASE 5 — Analytics Service [NOT STARTED]
-Meta Insights API metrics collection.
+**MVP simplifications:**
+- Uses `get_meta_credentials()` to obtain the single Meta access token — no per-user token lookup.
+- Celery Beat task every 6 hours fetches insights for ALL active publications (single user = no user filtering needed at Meta API level).
+- The `meta_insights_service.py` calls Meta Insights API via `facebook-business` SDK using the env var token.
+- No token refresh logic — if token expires, it's manually updated in `.env` and containers restarted.
+- Stores metrics in `analytics_schema.campaign_metrics` with `campaign_id` and `meta_ad_id` as cross-service references.
+
+**Endpoints:** Standard CRUD as defined in API reference above. All endpoints still require JWT and filter by `user_id` (future-proof).
+
+**Future multi-user changes:** Replace `get_meta_credentials()` call with per-user token lookup from `ad_accounts` table. Add user-scoped Celery Beat scheduling.
 
 ### FASE 6 — Genetic Algorithm Service [NOT STARTED]
-Campaign optimization engine.
+**MVP scope:** Campaign optimization engine for the single owner's campaigns.
+
+**MVP simplifications:**
+- Evaluates ALL published campaigns — no multi-user partitioning needed.
+- Celery Beat task every 24 hours triggers optimization for the single `user_id`.
+- Fetches metrics from analytics-service via internal HTTP (no auth token forwarding needed between services).
+- Fetches campaign data from campaign-service via internal HTTP.
+- Mutation requests sent to ai-generation-service `/generate/mutate`.
+- New campaigns created by calling campaign-service + publishing-service internally.
+- Uses `get_meta_credentials()` if any direct Meta API calls are needed (e.g., pausing underperformers).
+- `GeneticConfig` is seeded with a single row for the owner's `user_id` on first run (auto-create with defaults if not found).
+
+**Endpoints:** Standard CRUD as defined in API reference above. All endpoints still require JWT and store `user_id`.
+
+**Future multi-user changes:** Add per-user optimization scheduling. Partition campaign evaluation by `user_id`. Each user gets their own `GeneticConfig`.
 
 ### FASE 7 — Notification Service [NOT STARTED]
-User notification system.
+**MVP scope:** In-app notifications only (stored in database, queried via API).
+
+**MVP simplifications:**
+- **Only `in_app` channel** — no email (SendGrid), no WhatsApp delivery.
+- No `email_sender.py` — deferred to multi-user phase.
+- Notifications are created by other services dispatching Celery tasks to `notification_tasks` queue.
+- The notification worker simply inserts a row into `notification_schema.notifications`.
+- Frontend polls `GET /api/v1/notifications/unread-count` and `GET /api/v1/notifications/` to display notifications.
+- Notification types supported: `proposals_ready`, `image_ready`, `campaign_published`, `campaign_failed`, `optimization_complete`, `budget_alert`.
+- **Removed from MVP:** `token_expiring` notification type (no multi-user token management).
+
+**Endpoints:** Standard CRUD as defined in API reference above.
+
+**Future multi-user changes:** Add `email_sender.py` with SendGrid. Add WhatsApp notification channel. Add user notification preferences (which channels to receive). Re-add `token_expiring` type.
 
 ### FASE 8 — Integration & QA [NOT STARTED]
-End-to-end testing, error handling, logging.
+**MVP scope:** End-to-end testing of the complete single-user flow.
+
+**MVP simplifications:**
+- E2E test covers one user journey: create campaign → generate proposals → select proposal → generate image → publish to Meta → collect metrics → run optimization → receive notifications.
+- No multi-user concurrency testing.
+- No OAuth flow testing (unused in MVP).
+- No token refresh/expiration testing (manual process in MVP).
+- Focus areas: inter-service communication reliability, Celery task chain completion, Meta API error handling (190, 17/613, 100), data consistency across schemas.
+- Load testing is NOT in MVP scope.
+
+**Future multi-user changes:** Add concurrent user tests, OAuth flow tests, token lifecycle tests, load/stress testing.
 
 ---
 
@@ -1042,3 +1128,5 @@ End-to-end testing, error handling, logging.
 8. **Internal service calls use Docker hostnames** (e.g., `http://campaign-service:8001`), never `localhost`.
 9. **Meta SDK calls are synchronous** — the `facebook-business` SDK does not support async. Wrap SDK calls in `asyncio.to_thread()` or execute within Celery tasks (which are already synchronous).
 10. **Update this file** when a phase is completed by changing its status from [NOT STARTED] to [COMPLETED].
+11. **MVP single-user:** Always use `get_meta_credentials(user_id)` for Meta credentials — never read env vars directly in service code. This ensures a clean migration path to multi-user.
+12. **Keep `user_id` everywhere.** Even though there's one user in MVP, always store and filter by `user_id` from JWT. This is the #1 thing that makes multi-user migration trivial.

@@ -179,6 +179,11 @@ export interface CampaignMetric {
   collected_at: string
 }
 
+export interface MetricListResponse {
+  items: CampaignMetric[]
+  total: number
+}
+
 export interface MetricsSummary {
   total_campaigns: number
   active_campaigns: number
@@ -188,11 +193,16 @@ export interface MetricsSummary {
   total_conversions: number
   avg_ctr: number
   avg_cpc_cents: number
+  avg_roas: number
+  date_range_start: string
+  date_range_end: string
 }
 
 export interface TopPerformer {
   campaign_id: string
   meta_ad_id: string
+  impressions: number
+  clicks: number
   ctr: number
   roas: number
   spend_cents: number

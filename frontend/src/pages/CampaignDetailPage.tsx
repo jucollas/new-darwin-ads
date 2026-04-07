@@ -20,7 +20,17 @@ import {
   Send,
   CheckCircle2,
   AlertCircle,
+  BarChart3,
 } from "lucide-react"
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -39,6 +49,7 @@ import { ProposalDetailModal } from "@/components/ProposalDetailModal"
 import { PublishDialog } from "@/components/PublishDialog"
 import { useCampaignPublication } from "@/hooks/usePublishing"
 import { pausePublication, resumePublication } from "@/lib/api"
+import { formatCurrency, formatPercent } from "@/lib/utils"
 import type { Campaign, Proposal, CampaignMetric } from "@/types"
 
 export default function CampaignDetailPage() {
@@ -482,6 +493,116 @@ export default function CampaignDetailPage() {
               </Card>
             ))}
           </div>
+        )}
+      </div>
+
+      {/* Performance section */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <BarChart3 className="h-5 w-5" />
+          Rendimiento
+        </h2>
+        {metrics.length === 0 ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <BarChart3 className="h-12 w-12 text-muted-foreground mb-4" />
+              <p className="text-muted-foreground text-center">
+                Sin datos de rendimiento aún. Las métricas se recolectan cada 6 horas después de publicar.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricCard
+                title="Impresiones"
+                value={totalImpressions.toLocaleString()}
+                icon={Eye}
+              />
+              <MetricCard
+                title="Clicks"
+                value={totalClicks.toLocaleString()}
+                icon={MousePointerClick}
+              />
+              <MetricCard
+                title="CTR"
+                value={formatPercent(
+                  totalImpressions > 0
+                    ? (totalClicks / totalImpressions) * 100
+                    : 0
+                )}
+                icon={Target}
+              />
+              <MetricCard
+                title="Gasto"
+                value={formatCurrency(totalSpendCents)}
+                icon={DollarSign}
+              />
+            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Últimos 7 días</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart
+                    data={[...metrics]
+                      .sort((a, b) => a.date.localeCompare(b.date))
+                      .slice(-7)
+                      .map((m) => ({
+                        date: m.date,
+                        impressions: m.impressions,
+                        clicks: m.clicks,
+                      }))}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(v) =>
+                        new Date(v + "T00:00:00").toLocaleDateString("es-ES", {
+                          day: "numeric",
+                          month: "short",
+                        })
+                      }
+                      className="text-xs"
+                    />
+                    <YAxis className="text-xs" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      formatter={(value: number, name: string) => [
+                        value.toLocaleString(),
+                        name === "impressions" ? "Impresiones" : "Clicks",
+                      ]}
+                      labelFormatter={(label) =>
+                        new Date(label + "T00:00:00").toLocaleDateString("es-ES", {
+                          day: "numeric",
+                          month: "long",
+                        })
+                      }
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="impressions"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="clicks"
+                      stroke="#22c55e"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </>
         )}
       </div>
 
