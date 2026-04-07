@@ -300,11 +300,70 @@ class GeneticConfig(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(unique=True)
+
+    # --- Evaluation gates ---
     min_impressions_to_evaluate: Mapped[int] = mapped_column(default=1000)
     min_days_active: Mapped[int] = mapped_column(default=3)
-    fitness_weights: Mapped[dict] = mapped_column(JSON, default={"ctr": 0.3, "roas": 0.5, "cpc": 0.2})
+    min_spend_cpa_multiplier: Mapped[float] = mapped_column(default=2.0)
+    # Campaign must spend at least (target_cpa × multiplier) before full evaluation
+    target_cpa_cents: Mapped[int] = mapped_column(default=140)
+    # Target cost per conversation in smallest currency unit (140 centavos COP ≈ $0.35 USD)
+
+    # --- Fitness function weights (full evaluation: campaigns with 7+ days and conversion data) ---
+    fitness_weights: Mapped[dict] = mapped_column(JSON, default={
+        "roas": 0.30,
+        "conversion_rate": 0.25,
+        "cost_per_conversion": 0.20,  # inverse-normalized: lower is better
+        "ctr": 0.15,
+        "cpc": 0.10,                  # inverse-normalized: lower is better
+    })
+
+    # --- Early-stage weights (campaigns with 3-7 days, no reliable conversion data yet) ---
+    early_stage_weights: Mapped[dict] = mapped_column(JSON, default={
+        "ctr": 0.35,
+        "cpc": 0.25,                  # inverse-normalized
+        "cost_per_conversion": 0.20,  # inverse-normalized
+        "impressions": 0.20,          # proxy for delivery health
+    })
+
+    # --- Kill thresholds ---
+    emergency_kill_cpa_multiplier: Mapped[float] = mapped_column(default=3.0)
+    # Kill immediately if CPA > target_cpa × this multiplier
+    kill_percentile_bottom: Mapped[float] = mapped_column(default=0.20)
+    # Kill bottom N% of campaigns by CTR after early stage
+    ctr_absolute_floor: Mapped[float] = mapped_column(default=0.005)
+    # Kill if CTR < 0.5% after 1000+ impressions (creative-audience mismatch)
+    max_frequency_prospecting: Mapped[float] = mapped_column(default=3.0)
+    # Kill/refresh if frequency exceeds this with declining CTR (ad fatigue)
+    graduated_cpa_threshold: Mapped[float] = mapped_column(default=1.2)
+    # Start budget reduction when CPA > target × this (1.2 = 20% above target)
+
+    # --- Duplicate/scale thresholds ---
+    duplicate_min_days_stable: Mapped[int] = mapped_column(default=7)
+    duplicate_min_weekly_conversions: Mapped[int] = mapped_column(default=30)
+    duplicate_max_cpa_ratio: Mapped[float] = mapped_column(default=1.2)
+    # CPA must be within 120% of target to qualify for duplication
+    duplicate_min_roas: Mapped[float] = mapped_column(default=3.0)
+    # Minimum ROAS to qualify for duplication (Colombia WhatsApp benchmark)
+    max_budget_increase_pct: Mapped[float] = mapped_column(default=0.20)
+    # Vertical scaling: max 20% budget increase per interval
+    budget_increase_interval_days: Mapped[int] = mapped_column(default=3)
+    duplicates_per_winner: Mapped[int] = mapped_column(default=3)
+
+    # --- GA parameters ---
     mutation_rate: Mapped[float] = mapped_column(default=0.15)
+    crossover_rate: Mapped[float] = mapped_column(default=0.80)
+    elitism_count: Mapped[int] = mapped_column(default=2)
+    # Top N campaigns preserved unchanged across generations
     max_active_campaigns: Mapped[int] = mapped_column(default=10)
+
+    # --- Mutation priorities (ordered by impact, used by GPT mutate endpoint) ---
+    mutation_priorities: Mapped[list] = mapped_column(JSON, default=[
+        "target_audience",    # highest impact: demographics, interests, locations
+        "image_prompt",       # creative visual changes
+        "copy_text",          # ad copy and CTA text
+        "welcome_message",    # WhatsApp-specific: initial bot message
+    ])
 ```
 
 #### notification_schema (notification-service)
@@ -1069,21 +1128,61 @@ Meta Marketing API v25.0 integration using the official `facebook-business` Pyth
 **Future multi-user changes:** Replace `get_meta_credentials()` call with per-user token lookup from `ad_accounts` table. Add user-scoped Celery Beat scheduling.
 
 ### FASE 6 — Genetic Algorithm Service [NOT STARTED]
-**MVP scope:** Campaign optimization engine for the single owner's campaigns.
+**MVP scope:** Campaign optimization engine for the single owner's WhatsApp Click-to-Chat campaigns in Colombia.
+
+**Optimization strategy — WhatsApp CTWA specifics:**
+- Target cost per conversation (CPA): ~$0.35 USD / ~140 COP centavos (configurable via `target_cpa_cents`)
+- Colombia benchmarks: CTR 0.4%–1.0%, CPC $0.30–$0.50, ROAS 3×–7×
+- Meta's 72-hour free messaging window makes WhatsApp conversations more valuable than pixel events
+
+**Fitness function — two-phase evaluation:**
+- **Early-stage (3–7 days, <50 conversions):** Weighted sum using leading indicators: CTR (0.35), CPC inverse (0.25), cost-per-conversation inverse (0.20), delivery health (0.20). Applied with confidence discount: `F × min(1, impressions/1000) × min(1, days_active/7) × min(1, spend/(2×target_CPA))`
+- **Full evaluation (7+ days, learning phase exited):** Weighted sum: ROAS (0.30), conversion_rate (0.25), cost-per-conversation inverse (0.20), CTR (0.15), CPC inverse (0.10)
+- **Normalization:** Min-max normalization across the active campaign portfolio (self-calibrating). Metrics where lower is better (CPC, cost_per_conversion) use inverse normalization: `1 - (x - min)/(max - min)`
+
+**Four-tier kill framework:**
+- **Tier 1 — Emergency kill (any time):** CPA > 3× target, or zero clicks after 2,000+ impressions
+- **Tier 2 — Early creative kill (after 1,000+ impressions):** Bottom 20% by CTR percentile, or CTR < 0.5% absolute floor
+- **Tier 3 — Performance kill (after 50+ clicks and 2× CPA spend):** Cost per conversation > 150% of target for 7+ consecutive days, or frequency > 3.0 with declining CTR (ad fatigue)
+- **Tier 4 — Graduated response (after learning phase, 7+ days):** CPA 20% above target → reduce budget 20%. Still elevated after 2 days → reduce 30% more. Still elevated after 5 total days → pause campaign
+
+**Duplicate/scale criteria (all must be met):**
+- CPA within 120% of target sustained for 7+ days
+- 30+ weekly conversions (exited Meta learning phase)
+- ROAS above 3× (Colombia WhatsApp break-even threshold)
+- Vertical scaling: budget increase max 20% every 3 days (avoids learning phase re-entry)
+- Horizontal scaling: clone 3 copies per winner into non-overlapping audiences at reset budgets
+
+**Mutation strategy (priority order, sent to ai-generation-service `/generate/mutate`):**
+1. Target audience (highest impact): demographics, interests, city tiers, age brackets
+2. Image prompt / creative (second): visual style, product vs lifestyle imagery
+3. Ad copy and CTA text: headlines, primary text, CTA button wording
+4. Welcome message (WhatsApp-specific): initial automated message, quick-reply buttons
+
+**GA parameters:** mutation_rate=0.15, crossover_rate=0.80, elitism=top 2 campaigns preserved unchanged
+
+**Implementation flow (runs every 24 hours via Celery Beat):**
+1. Fetch all published campaigns from campaign-service + their metrics from analytics-service (internal HTTP)
+2. Classify each campaign: immature (skip), early-stage (early weights), mature (full weights)
+3. Calculate fitness score for all evaluable campaigns
+4. Apply kill tiers: emergency kills first, then early creative kills, then performance kills, then graduated responses
+5. Pause killed campaigns via publishing-service `/publications/{id}/pause`
+6. Identify duplication candidates from top performers meeting all scale criteria
+7. For each winner: send mutation request to ai-generation-service `/generate/mutate` with mutation priorities
+8. Create new campaigns via campaign-service + publish via publishing-service (at reset budgets)
+9. Store run results in `OptimizationRun` with all fitness scores, kills, and duplications
+10. Dispatch notification to `notification_tasks` queue with type `optimization_complete`
 
 **MVP simplifications:**
-- Evaluates ALL published campaigns — no multi-user partitioning needed.
-- Celery Beat task every 24 hours triggers optimization for the single `user_id`.
-- Fetches metrics from analytics-service via internal HTTP (no auth token forwarding needed between services).
-- Fetches campaign data from campaign-service via internal HTTP.
-- Mutation requests sent to ai-generation-service `/generate/mutate`.
-- New campaigns created by calling campaign-service + publishing-service internally.
-- Uses `get_meta_credentials()` if any direct Meta API calls are needed (e.g., pausing underperformers).
-- `GeneticConfig` is seeded with a single row for the owner's `user_id` on first run (auto-create with defaults if not found).
+- Evaluates ALL published campaigns — no multi-user partitioning needed
+- Uses `get_meta_credentials()` if any direct Meta API calls are needed (e.g., pausing underperformers)
+- `GeneticConfig` is seeded with a single row for the owner's `user_id` on first run (auto-create with defaults if not found)
+- No Pareto analysis in MVP — weighted sum only. Pareto analysis deferred to post-MVP
+- No adaptive mutation rate in MVP — fixed rate. Adaptive mutation deferred to post-MVP
 
 **Endpoints:** Standard CRUD as defined in API reference above. All endpoints still require JWT and store `user_id`.
 
-**Future multi-user changes:** Add per-user optimization scheduling. Partition campaign evaluation by `user_id`. Each user gets their own `GeneticConfig`.
+**Future multi-user changes:** Add per-user optimization scheduling. Partition campaign evaluation by `user_id`. Each user gets their own `GeneticConfig`. Add Pareto analysis endpoint. Add adaptive mutation based on population diversity.
 
 ### FASE 7 — Notification Service [NOT STARTED]
 **MVP scope:** In-app notifications only (stored in database, queried via API).

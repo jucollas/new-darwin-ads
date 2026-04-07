@@ -184,6 +184,32 @@ services:
       redis:
         condition: service_healthy
 
+  genetic-worker:
+    build:
+      context: .
+      dockerfile: services/genetic-algorithm-service/Dockerfile
+    command: ["celery", "-A", "worker:celery_app", "worker", "--loglevel=info", "-Q", "genetic_tasks", "-c", "2"]
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      genetic-algorithm-service:
+        condition: service_started
+    restart: unless-stopped
+
+  genetic-beat:
+    build:
+      context: .
+      dockerfile: services/genetic-algorithm-service/Dockerfile
+    command: ["celery", "-A", "worker:celery_app", "beat", "--loglevel=info"]
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      genetic-algorithm-service:
+        condition: service_started
+    restart: unless-stopped
+
   celery-worker:
     build:
       context: .
