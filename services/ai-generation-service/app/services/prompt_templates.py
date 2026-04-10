@@ -25,7 +25,18 @@ RULES:
 6. image_prompt: A detailed prompt for AI image generation. Must describe: subject, style, colors, composition, mood. Always include "professional advertising photography" or "social media ad design".
 7. target_audience: Be specific. Derive from the user's description. Use real interest categories that exist in Meta Ads.
 8. cta_type: Always "whatsapp_chat" unless the user specifically requests something else.
-9. locations: Use ISO country codes (CO, MX, AR, PE, CL, EC, etc.)
+9. locations: Array of location objects. Use the MOST SPECIFIC level the user mentioned:
+   - If user mentions specific CITIES: [{"type": "city", "name": "Cali", "region": "Valle del Cauca", "country_code": "CO"}]
+   - If user mentions a DEPARTMENT/REGION: list major cities in that region as city objects.
+   - If user says "todo Colombia" or doesn't specify location: [{"type": "country", "country_code": "CO"}]
+   - NEVER mix countries and cities in the same array — use ONE type only.
+   - ALWAYS include "country_code" on every location object.
+   - For Colombia, include "region" (department name) when known.
+   Common Colombian cities and regions:
+   Cali → Valle del Cauca, Bogotá → Bogotá D.C., Medellín → Antioquia,
+   Barranquilla → Atlántico, Cartagena → Bolívar, Bucaramanga → Santander,
+   Pereira → Risaralda, Manizales → Caldas, Santa Marta → Magdalena,
+   Ibagué → Tolima, Villavicencio → Meta, Cúcuta → Norte de Santander.
 
 You MUST respond with ONLY a valid JSON object. No markdown, no backticks, no explanation. Just the JSON.
 
@@ -41,7 +52,7 @@ JSON SCHEMA:
         "age_max": number,
         "genders": ["male" | "female"],
         "interests": ["string", "string", ...],
-        "locations": ["ISO_CODE"]
+        "locations": [{"type": "city", "name": "string", "region": "string|null", "country_code": "ISO_CODE"} | {"type": "country", "country_code": "ISO_CODE"}]
       },
       "cta_type": "whatsapp_chat",
       "whatsapp_number": null
@@ -94,7 +105,7 @@ JSON SCHEMA:
       "age_max": number,
       "genders": ["string"],
       "interests": ["string"],
-      "locations": ["string"]
+      "locations": [{"type": "city|country", "name": "string?", "region": "string?", "country_code": "ISO_CODE"}]
     },
     "cta_type": "whatsapp_chat",
     "whatsapp_number": null

@@ -12,6 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { ProposalEditForm } from "@/components/ProposalEditForm"
 import { ProposalDetailModal } from "@/components/ProposalDetailModal"
+import { formatLocations } from "@/lib/formatters"
 import type { Proposal } from "@/types"
 
 interface ProposalCardProps {
@@ -45,7 +46,7 @@ export function ProposalCard({
     audience.age_min || audience.age_max
       ? `${audience.age_min}-${audience.age_max} años`
       : null,
-    audience.locations.length ? audience.locations.join(", ") : null,
+    audience.locations.length ? formatLocations(audience.locations) : null,
     audience.interests.length ? audience.interests.join(", ") : null,
   ]
     .filter(Boolean)

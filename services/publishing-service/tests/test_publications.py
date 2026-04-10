@@ -68,6 +68,19 @@ class TestPublicationEndpoints:
         )
         assert response.status_code == 422
 
+    async def test_create_publication_budget_below_minimum(self, client):
+        """Budget below $1 USD (100 cents) should be rejected."""
+        response = await client.post(
+            "/api/v1/publish/",
+            json={
+                "campaign_id": "00000000-0000-0000-0000-000000000001",
+                "proposal_id": "00000000-0000-0000-0000-000000000002",
+                "ad_account_id": "00000000-0000-0000-0000-000000000001",
+                "budget_daily_cents": 50,
+            },
+        )
+        assert response.status_code == 422
+
     async def test_create_publication_invalid_objective(self, client):
         response = await client.post(
             "/api/v1/publish/",

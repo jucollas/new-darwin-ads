@@ -88,7 +88,7 @@ class EvaluationService:
             return []
 
     async def build_evaluations(
-        self, user_id: str, token: str
+        self, user_id: str, token: str, config: GeneticConfig | None = None
     ) -> list[CampaignEvaluation]:
         """
         Orchestrate data fetching and build CampaignEvaluation objects.
@@ -96,12 +96,24 @@ class EvaluationService:
         campaigns = await self.fetch_published_campaigns(user_id, token)
         publications = await self.fetch_publications(user_id, token)
 
-        # Index publications by campaign_id
+        # Index publications by campaign_id — prefer active publication
         pub_by_campaign: dict[str, dict] = {}
         for pub in publications:
             cid = str(pub.get("campaign_id", ""))
-            if cid:
+            if not cid:
+                continue
+
+            pub_status = pub.get("status", "")
+            existing = pub_by_campaign.get(cid)
+
+            if existing is None:
                 pub_by_campaign[cid] = pub
+            elif pub_status == "active" and existing.get("status") != "active":
+                pub_by_campaign[cid] = pub
+            elif pub_status == "active" and existing.get("status") == "active":
+                # Both active — prefer the most recently published
+                if pub.get("published_at", "") > existing.get("published_at", ""):
+                    pub_by_campaign[cid] = pub
 
         evaluations: list[CampaignEvaluation] = []
 
@@ -137,9 +149,31 @@ class EvaluationService:
                 total_conversions / total_clicks if total_clicks > 0 else 0.0
             )
 
-            # Latest ROAS from metrics
-            roas_values = [m.get("roas", 0.0) for m in metrics if m.get("roas", 0)]
-            roas = roas_values[-1] if roas_values else 0.0
+            # Weighted average ROAS by spend
+            total_roas_spend = 0.0
+            total_spend_for_roas = 0.0
+            for m in metrics:
+                day_roas = m.get("roas", 0.0) or 0.0
+                day_spend = m.get("spend_cents", 0) or 0
+                if day_spend > 0:
+                    total_roas_spend += day_roas * day_spend
+                    total_spend_for_roas += day_spend
+
+            roas = (total_roas_spend / total_spend_for_roas) if total_spend_for_roas > 0 else 0.0
+
+            # WhatsApp CTWA campaigns: Meta reports ROAS=0 because conversations
+            # aren't tracked as purchases. Estimate ROAS from conversions using
+            # target_cpa_cents * 3 as the estimated revenue per conversation.
+            if roas == 0.0 and total_conversions > 0 and total_spend_cents > 0:
+                target_cpa = config.target_cpa_cents if config else 140
+                estimated_revenue = total_conversions * target_cpa * 3
+                roas = estimated_revenue / total_spend_cents
+                logger.info(
+                    "estimated_roas_whatsapp",
+                    campaign_id=campaign_id,
+                    estimated_roas=round(roas, 2),
+                    conversions=total_conversions,
+                )
 
             # Days active
             published_at_str = pub.get("published_at")

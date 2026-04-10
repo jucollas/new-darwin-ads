@@ -1,4 +1,4 @@
-import { DollarSign } from "lucide-react"
+import { DollarSign, MapPin } from "lucide-react"
 import {
   Card,
   CardContent,
@@ -6,6 +6,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { StatusBadge } from "@/components/StatusBadge"
+import { formatGeoLocations } from "@/lib/formatters"
 import type { Publication } from "@/types"
 
 interface PublicationCardProps {
@@ -35,7 +36,13 @@ export function PublicationCard({ publication, onClick }: PublicationCardProps) 
       </CardHeader>
 
       <CardContent>
-        <div className="text-sm text-muted-foreground">
+        <div className="text-sm text-muted-foreground space-y-1">
+          {publication.resolved_geo_locations && (
+            <span className="flex items-center gap-1 text-xs">
+              <MapPin className="h-3 w-3" />
+              {formatGeoLocations(publication.resolved_geo_locations)}
+            </span>
+          )}
           {publication.published_at && (
             <span>
               Publicada:{" "}

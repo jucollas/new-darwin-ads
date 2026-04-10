@@ -104,8 +104,8 @@ def publish_ad_task(
         meta_ids["meta_campaign_id"] = meta_campaign_id
         _update_publication_status(publication_id, "publishing", meta_ids=dict(meta_ids))
 
-        # 3c. Create Ad Set (PAUSED)
-        meta_adset_id = service.create_adset(
+        # 3c. Create Ad Set (PAUSED) — returns (adset_id, resolved_geo_locations)
+        meta_adset_id, resolved_geo_locations = service.create_adset(
             ad_account_id=meta_ad_account_id,
             campaign_id=meta_campaign_id,
             name=f"{name} - Ad Set",
@@ -148,8 +148,12 @@ def publish_ad_task(
         service._activate_object(meta_adset_id, AdSet)
         service._activate_object(meta_ad_id, Ad)
 
-        # Step 4: Update publication with final status
-        _update_publication_status(publication_id, "active", meta_ids=meta_ids)
+        # Step 4: Update publication with final status + resolved locations
+        _update_publication_status(
+            publication_id, "active",
+            meta_ids=meta_ids,
+            resolved_geo_locations=resolved_geo_locations,
+        )
 
         # Step 5: Update campaign status to "published"
         _update_campaign_status(campaign_id, "published")
@@ -332,6 +336,7 @@ def _update_publication_status(
     meta_ids: dict | None = None,
     error_message: str | None = None,
     error_code: int | None = None,
+    resolved_geo_locations: dict | None = None,
 ) -> None:
     """Update publication status via internal endpoint."""
     payload = {"status": status}
@@ -341,6 +346,8 @@ def _update_publication_status(
         payload["error_message"] = error_message
     if error_code is not None:
         payload["error_code"] = error_code
+    if resolved_geo_locations is not None:
+        payload["resolved_geo_locations"] = resolved_geo_locations
 
     try:
         with httpx.Client(timeout=10.0) as client:

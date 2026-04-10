@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusBadge } from "@/components/StatusBadge"
 import { MetricCard } from "@/components/MetricCard"
+import { formatGeoLocations } from "@/lib/formatters"
 import {
   LineChart,
   Line,
@@ -198,9 +199,12 @@ export default function PublicationDetailPage() {
           <StatusBadge status={publication.status} />
         </div>
 
-        {/* Budget */}
+        {/* Budget & Location */}
         <p className="text-muted-foreground">
           Presupuesto diario: ${(publication.budget_daily_cents / 100).toFixed(2)}
+        </p>
+        <p className="text-muted-foreground">
+          Ubicación: {formatGeoLocations(publication.resolved_geo_locations)}
         </p>
 
         {/* Selected proposal info */}

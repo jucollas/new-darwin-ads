@@ -190,7 +190,7 @@ async def publish_campaign(
     if not campaign:
         raise HTTPException(
             status_code=400,
-            detail="Campaign not found or not ready to publish (must be in 'image_ready' status with a selected proposal)",
+            detail="Campaign not found or not ready to publish (must be in 'image_ready', 'failed', or 'publishing' status with a selected proposal)",
         )
     return campaign
 

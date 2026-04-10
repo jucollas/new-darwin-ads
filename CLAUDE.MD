@@ -1127,7 +1127,7 @@ Meta Marketing API v25.0 integration using the official `facebook-business` Pyth
 
 **Future multi-user changes:** Replace `get_meta_credentials()` call with per-user token lookup from `ad_accounts` table. Add user-scoped Celery Beat scheduling.
 
-### FASE 6 — Genetic Algorithm Service [NOT STARTED]
+### FASE 6 — Genetic Algorithm Service [COMPLETED]
 **MVP scope:** Campaign optimization engine for the single owner's WhatsApp Click-to-Chat campaigns in Colombia.
 
 **Optimization strategy — WhatsApp CTWA specifics:**

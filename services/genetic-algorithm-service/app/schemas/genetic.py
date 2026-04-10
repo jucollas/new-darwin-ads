@@ -197,6 +197,7 @@ class KillDecision(BaseModel):
     tier: int
     reason: str
     action: str
+    budget_daily_cents: int
 
 
 class DuplicateDecision(BaseModel):
@@ -206,3 +207,4 @@ class DuplicateDecision(BaseModel):
     proposal_id: uuid.UUID
     num_copies: int
     mutation_params: list[str]
+    parent_budget_daily_cents: int

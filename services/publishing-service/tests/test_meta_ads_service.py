@@ -50,17 +50,22 @@ class TestMetaAdsService:
         assert result == "camp_123"
         mock_account.create_campaign.assert_called_once()
 
+    @patch("app.services.meta_ads_service.MetaLocationResolver")
     @patch("app.services.meta_ads_service.AdAccount")
-    def test_create_adset_with_whatsapp_targeting(self, mock_account_cls, mock_api_cls, mock_session_cls):
+    def test_create_adset_with_whatsapp_targeting(self, mock_account_cls, mock_resolver_cls, mock_api_cls, mock_session_cls):
         mock_account = MagicMock()
         mock_account.create_ad_set.return_value = {"id": "adset_123"}
         mock_account_cls.return_value = mock_account
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve.return_value = ({"countries": ["CO"]}, {"countries": ["CO"]})
+        mock_resolver_cls.return_value = mock_resolver
 
         service = MetaAdsService("test_token")
         # Mock resolve_interest_ids to avoid SDK calls
         service.resolve_interest_ids = MagicMock(return_value=[{"id": "6003", "name": "fashion"}])
 
-        result = service.create_adset(
+        adset_id, resolved_geo = service.create_adset(
             ad_account_id="act_123",
             campaign_id="camp_123",
             name="Test AdSet",
@@ -75,7 +80,8 @@ class TestMetaAdsService:
             page_id="page_123",
             whatsapp_phone_number="+573001234567",
         )
-        assert result == "adset_123"
+        assert adset_id == "adset_123"
+        assert resolved_geo == {"countries": ["CO"]}
 
         # Verify WhatsApp-specific params
         call_params = mock_account.create_ad_set.call_args[1]["params"]
@@ -124,11 +130,16 @@ class TestMetaAdsService:
         assert "special_ad_categories" in call_params
         assert call_params["special_ad_categories"] == []
 
+    @patch("app.services.meta_ads_service.MetaLocationResolver")
     @patch("app.services.meta_ads_service.AdAccount")
-    def test_budget_passed_in_cents(self, mock_account_cls, mock_api_cls, mock_session_cls):
+    def test_budget_passed_in_cents(self, mock_account_cls, mock_resolver_cls, mock_api_cls, mock_session_cls):
         mock_account = MagicMock()
         mock_account.create_ad_set.return_value = {"id": "adset_789"}
         mock_account_cls.return_value = mock_account
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve.return_value = ({"countries": ["CO"]}, {"countries": ["CO"]})
+        mock_resolver_cls.return_value = mock_resolver
 
         service = MetaAdsService("test_token")
         service.resolve_interest_ids = MagicMock(return_value=[])
@@ -398,14 +409,19 @@ class TestErrorHandling:
 class TestAdSetCreation:
     """Verify AdSet params use correct types."""
 
+    @patch("app.services.meta_ads_service.MetaLocationResolver")
     @patch("app.services.meta_ads_service.AdAccount")
-    def test_daily_budget_is_string(self, MockAdAccount, mock_api_cls, mock_session_cls):
+    def test_daily_budget_is_string(self, MockAdAccount, MockResolver, mock_api_cls, mock_session_cls):
         """Bug #4: Meta API expects daily_budget as string, not integer."""
         mock_account = MagicMock()
         mock_adset_result = MagicMock()
         mock_adset_result.__getitem__ = MagicMock(return_value="adset_123")
         mock_account.create_ad_set.return_value = mock_adset_result
         MockAdAccount.return_value = mock_account
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve.return_value = ({"countries": ["CO"]}, {"countries": ["CO"]})
+        MockResolver.return_value = mock_resolver
 
         service = MetaAdsService("test_token")
         service.resolve_interest_ids = MagicMock(return_value=[])
@@ -460,16 +476,21 @@ class TestAdSetTargeting:
         assert "targeting_automation" in source, \
             "AdSet targeting must include targeting_automation dict"
 
+    @patch("app.services.meta_ads_service.MetaLocationResolver")
     @patch("app.services.meta_ads_service.FacebookSession")
     @patch("app.services.meta_ads_service.FacebookAdsApi")
     @patch("app.services.meta_ads_service.AdAccount")
-    def test_adset_params_include_targeting_automation(self, MockAdAccount, mock_api_cls, mock_session_cls):
+    def test_adset_params_include_targeting_automation(self, MockAdAccount, mock_api_cls, mock_session_cls, MockResolver):
         """AdSet targeting dict sent to Meta must contain targeting_automation.advantage_audience."""
         mock_account = MagicMock()
         mock_adset_result = MagicMock()
         mock_adset_result.__getitem__ = MagicMock(return_value="adset_456")
         mock_account.create_ad_set.return_value = mock_adset_result
         MockAdAccount.return_value = mock_account
+
+        mock_resolver = MagicMock()
+        mock_resolver.resolve.return_value = ({"countries": ["CO"]}, {"countries": ["CO"]})
+        MockResolver.return_value = mock_resolver
 
         service = MetaAdsService("test_token")
         service.resolve_interest_ids = MagicMock(return_value=[])

@@ -65,8 +65,14 @@ class DuplicationManager:
             ):
                 continue
 
-            # ROAS threshold
-            if ev.roas < config.duplicate_min_roas:
+            # ROAS threshold — check either real ROAS or conversation-based efficiency
+            has_good_roas = ev.roas >= config.duplicate_min_roas
+            has_good_cost_efficiency = (
+                ev.total_conversions > 0
+                and ev.cost_per_conversion_cents > 0
+                and ev.cost_per_conversion_cents <= config.target_cpa_cents * config.duplicate_max_cpa_ratio
+            )
+            if not has_good_roas and not has_good_cost_efficiency:
                 continue
 
             candidates.append(fr)
@@ -113,6 +119,7 @@ class DuplicationManager:
                     proposal_id=ev.publication_id,  # will be resolved to actual proposal
                     num_copies=copies_possible,
                     mutation_params=mutation_params,
+                    parent_budget_daily_cents=ev.budget_daily_cents,
                 )
             )
             total_copies_planned += copies_possible

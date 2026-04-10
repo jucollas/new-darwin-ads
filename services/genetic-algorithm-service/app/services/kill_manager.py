@@ -107,6 +107,7 @@ class KillManager:
                         tier=1,
                         reason=reason,
                         action="pause",
+                        budget_daily_cents=e.budget_daily_cents,
                     )
                 )
                 logger.info(
@@ -157,6 +158,7 @@ class KillManager:
                         tier=2,
                         reason=reason,
                         action="pause",
+                        budget_daily_cents=e.budget_daily_cents,
                     )
                 )
                 logger.info(
@@ -227,6 +229,7 @@ class KillManager:
                         tier=3,
                         reason=reason,
                         action="pause",
+                        budget_daily_cents=e.budget_daily_cents,
                     )
                 )
                 logger.info(
@@ -273,6 +276,7 @@ class KillManager:
                             f"${target_dollars:.2f} (persistent)"
                         ),
                         action="pause",
+                        budget_daily_cents=e.budget_daily_cents,
                     )
                 )
             elif recent_cpa > reduce_threshold:
@@ -288,6 +292,7 @@ class KillManager:
                             f"${target_dollars:.2f}"
                         ),
                         action="reduce_budget_20",
+                        budget_daily_cents=e.budget_daily_cents,
                     )
                 )
 

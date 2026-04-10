@@ -9,10 +9,10 @@ export function cn(...inputs: ClassValue[]) {
  * Format cents to currency display string.
  * 2350 → "$23.50"
  */
-export const formatCurrency = (cents: number, currency: string = 'COP'): string => {
+export const formatCurrency = (cents: number, currency: string = 'USD'): string => {
   const amount = cents / 100
-  if (currency === 'COP') {
-    return `$${Math.round(amount).toLocaleString('es-CO')}`
+  if (currency === 'USD') {
+    return `$${amount.toFixed(2)}`
   }
   return `$${amount.toFixed(2)}`
 }

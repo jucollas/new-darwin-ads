@@ -1,8 +1,23 @@
 from datetime import datetime
-
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, field_serializer, model_validator
+
+
+# ---------------------------------------------------------------------------
+# Location schemas (live inside target_audience JSON, not separate DB tables)
+# ---------------------------------------------------------------------------
+
+class LocationCountry(BaseModel):
+    type: Literal["country"] = "country"
+    country_code: str  # ISO 2-letter code, e.g. "CO"
+
+
+class LocationCity(BaseModel):
+    type: Literal["city"] = "city"
+    name: str  # City name as it appears in Meta, e.g. "Cali"
+    region: str | None = None  # Department/state, e.g. "Valle del Cauca"
+    country_code: str  # ISO 2-letter code, e.g. "CO"
 
 
 # ---------------------------------------------------------------------------

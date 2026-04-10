@@ -77,9 +77,9 @@ class PublishRequest(BaseModel):
 
     @field_validator("budget_daily_cents")
     @classmethod
-    def budget_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("budget_daily_cents must be greater than 0")
+    def budget_minimum(cls, v: int) -> int:
+        if v < 100:
+            raise ValueError("budget_daily_cents must be at least 100 ($1 USD)")
         return v
 
     @field_validator("campaign_objective")
@@ -150,6 +150,7 @@ class PublicationResponse(BaseModel):
     campaign_objective: str
     status: str
     budget_daily_cents: int
+    resolved_geo_locations: dict | None = None
     published_at: datetime | None
     error_message: str | None
     error_code: int | None
@@ -161,6 +162,17 @@ class PublicationListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class PublicationBudgetUpdate(BaseModel):
+    budget_daily_cents: int
+
+    @field_validator("budget_daily_cents")
+    @classmethod
+    def budget_minimum(cls, v: int) -> int:
+        if v < 100:
+            raise ValueError("budget_daily_cents must be at least 100 ($1 USD)")
+        return v
 
 
 class PublicationStatusResponse(BaseModel):

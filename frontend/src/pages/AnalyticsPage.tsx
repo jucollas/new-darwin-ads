@@ -426,16 +426,16 @@ export default function AnalyticsPage() {
                           {item.campaign_id.slice(0, 8)}...
                         </td>
                         <td className="py-3 text-right">
-                          {item.impressions.toLocaleString()}
+                          {(item.impressions ?? 0).toLocaleString()}
                         </td>
                         <td className="py-3 text-right">
-                          {item.clicks.toLocaleString()}
+                          {(item.clicks ?? 0).toLocaleString()}
                         </td>
                         <td className="py-3 text-right text-green-600">
-                          {formatPercent(item.ctr)}
+                          {formatPercent(item.ctr ?? 0)}
                         </td>
                         <td className="py-3 text-right text-green-600">
-                          {formatROAS(item.roas)}
+                          {formatROAS(item.roas ?? 0)}
                         </td>
                       </tr>
                     ))}
@@ -488,16 +488,16 @@ export default function AnalyticsPage() {
                           {item.campaign_id.slice(0, 8)}...
                         </td>
                         <td className="py-3 text-right">
-                          {item.impressions.toLocaleString()}
+                          {(item.impressions ?? 0).toLocaleString()}
                         </td>
                         <td className="py-3 text-right">
-                          {item.clicks.toLocaleString()}
+                          {(item.clicks ?? 0).toLocaleString()}
                         </td>
                         <td className="py-3 text-right text-red-500">
-                          {formatPercent(item.ctr)}
+                          {formatPercent(item.ctr ?? 0)}
                         </td>
                         <td className="py-3 text-right text-red-500">
-                          {formatROAS(item.roas)}
+                          {formatROAS(item.roas ?? 0)}
                         </td>
                       </tr>
                     ))}

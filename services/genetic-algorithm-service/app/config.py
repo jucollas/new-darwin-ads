@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     PUBLISHING_SERVICE_URL: str = "http://publishing-service:8004"
     AI_SERVICE_URL: str = "http://ai-generation-service:8002"
 
+    # MVP: fallback user ID for Celery Beat tasks (single-user mode)
+    OWNER_USER_ID: str = ""
+
     # Optimization schedule
     OPTIMIZATION_INTERVAL_HOURS: int = 24
 

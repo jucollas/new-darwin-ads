@@ -2,7 +2,7 @@ import { useForm, Controller } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { useMutation } from "@tanstack/react-query"
-import { Loader2 } from "lucide-react"
+import { Loader2, X } from "lucide-react"
 import { toast } from "sonner"
 import api from "@/lib/api"
 import { ENDPOINTS } from "@/lib/endpoints"
@@ -19,7 +19,61 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { TagInput } from "@/components/TagInput"
-import type { Proposal } from "@/types"
+import type { Proposal, LocationEntry, LocationCountry, LocationCity } from "@/types"
+
+// Predefined Colombian city options
+const LOCATION_PRESETS: { label: string; value: LocationEntry }[] = [
+  { label: "Todo Colombia", value: { type: "country", country_code: "CO" } },
+  { label: "Bogotá D.C.", value: { type: "city", name: "Bogotá", region: "Bogotá D.C.", country_code: "CO" } },
+  { label: "Cali, Valle del Cauca", value: { type: "city", name: "Cali", region: "Valle del Cauca", country_code: "CO" } },
+  { label: "Medellín, Antioquia", value: { type: "city", name: "Medellín", region: "Antioquia", country_code: "CO" } },
+  { label: "Barranquilla, Atlántico", value: { type: "city", name: "Barranquilla", region: "Atlántico", country_code: "CO" } },
+  { label: "Cartagena, Bolívar", value: { type: "city", name: "Cartagena", region: "Bolívar", country_code: "CO" } },
+  { label: "Bucaramanga, Santander", value: { type: "city", name: "Bucaramanga", region: "Santander", country_code: "CO" } },
+  { label: "Pereira, Risaralda", value: { type: "city", name: "Pereira", region: "Risaralda", country_code: "CO" } },
+  { label: "Santa Marta, Magdalena", value: { type: "city", name: "Santa Marta", region: "Magdalena", country_code: "CO" } },
+  { label: "Manizales, Caldas", value: { type: "city", name: "Manizales", region: "Caldas", country_code: "CO" } },
+  { label: "Ibagué, Tolima", value: { type: "city", name: "Ibagué", region: "Tolima", country_code: "CO" } },
+  { label: "Villavicencio, Meta", value: { type: "city", name: "Villavicencio", region: "Meta", country_code: "CO" } },
+  { label: "Cúcuta, Norte de Santander", value: { type: "city", name: "Cúcuta", region: "Norte de Santander", country_code: "CO" } },
+]
+
+/** Convert a LocationEntry to a display label */
+function locationToLabel(loc: LocationEntry): string {
+  if (typeof loc === "string") return loc
+  if (loc.type === "city") return loc.region ? `${loc.name}, ${loc.region}` : loc.name
+  if (loc.type === "country") return loc.country_code === "CO" ? "Todo Colombia" : loc.country_code
+  return JSON.stringify(loc)
+}
+
+/** Convert current locations array to serializable strings for the form */
+function locationsToFormKeys(locations: LocationEntry[]): string[] {
+  return locations.map((loc) => {
+    if (typeof loc === "string") return `country:${loc}`
+    if (loc.type === "city") return `city:${loc.name}:${loc.region || ""}:${loc.country_code}`
+    if (loc.type === "country") return `country:${loc.country_code}`
+    return JSON.stringify(loc)
+  })
+}
+
+/** Convert form key back to a LocationEntry */
+function formKeyToLocation(key: string): LocationCountry | LocationCity {
+  if (key.startsWith("city:")) {
+    const [, name, region, country_code] = key.split(":")
+    return { type: "city", name, region: region || null, country_code }
+  }
+  if (key.startsWith("country:")) {
+    const code = key.slice("country:".length)
+    return { type: "country", country_code: code }
+  }
+  // Legacy bare country code
+  return { type: "country", country_code: key }
+}
+
+/** Get the form key for a preset */
+function presetToFormKey(preset: LocationEntry): string {
+  return locationsToFormKeys([preset])[0]
+}
 
 const proposalSchema = z
   .object({
@@ -36,7 +90,7 @@ const proposalSchema = z
       .max(65, "Máximo 65"),
     genders: z.array(z.string()).min(1, "Selecciona al menos un género"),
     interests: z.array(z.string()).min(1, "Agrega al menos un interés"),
-    locations: z.array(z.string()).min(1, "Agrega al menos una ubicación"),
+    locationKeys: z.array(z.string()).min(1, "Agrega al menos una ubicación"),
     cta_type: z.enum(["whatsapp_chat", "link", "call"]),
     whatsapp_number: z.string().optional(),
   })
@@ -107,7 +161,7 @@ export function ProposalEditForm({
       age_max: proposal.target_audience.age_max,
       genders: proposal.target_audience.genders,
       interests: proposal.target_audience.interests,
-      locations: proposal.target_audience.locations,
+      locationKeys: locationsToFormKeys(proposal.target_audience.locations),
       cta_type: proposal.cta_type,
       whatsapp_number: proposal.whatsapp_number ?? "",
     },
@@ -117,6 +171,7 @@ export function ProposalEditForm({
 
   const saveMutation = useMutation({
     mutationFn: async (values: ProposalFormValues) => {
+      const locations = values.locationKeys.map(formKeyToLocation)
       const { data } = await api.put(
         ENDPOINTS.campaigns.updateProposal(proposal.campaign_id, proposal.id),
         {
@@ -128,7 +183,7 @@ export function ProposalEditForm({
             age_max: values.age_max,
             genders: values.genders,
             interests: values.interests,
-            locations: values.locations,
+            locations,
           },
           cta_type: values.cta_type,
           whatsapp_number:
@@ -302,22 +357,79 @@ export function ProposalEditForm({
 
       {/* Locations */}
       <div className="space-y-1.5">
-        <Label>Ubicaciones (código ISO)</Label>
+        <Label>Ubicación del anuncio</Label>
         <Controller
           control={control}
-          name="locations"
+          name="locationKeys"
           render={({ field }) => (
-            <TagInput
-              value={field.value}
-              onChange={field.onChange}
-              placeholder="Agrega un código ISO (ej: CO, MX)"
-              disabled={isSaving}
-            />
+            <div className="space-y-2">
+              {/* Selected locations */}
+              {field.value.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {field.value.map((key) => (
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-xs font-medium"
+                    >
+                      {locationToLabel(formKeyToLocation(key))}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          field.onChange(field.value.filter((k) => k !== key))
+                        }
+                        disabled={isSaving}
+                        className="ml-0.5 hover:text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {/* Selector */}
+              <Select
+                disabled={isSaving}
+                onValueChange={(val) => {
+                  if (val && !field.value.includes(val)) {
+                    // If selecting a country, clear existing cities (no mixing)
+                    const loc = formKeyToLocation(val)
+                    if (loc.type === "country") {
+                      field.onChange([val])
+                    } else {
+                      // If adding a city, remove any country entries
+                      const filtered = field.value.filter(
+                        (k) => !k.startsWith("country:"),
+                      )
+                      field.onChange([...filtered, val])
+                    }
+                  }
+                }}
+                value=""
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Agregar ubicación..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {LOCATION_PRESETS.map((preset) => {
+                    const key = presetToFormKey(preset.value)
+                    return (
+                      <SelectItem
+                        key={key}
+                        value={key}
+                        disabled={field.value.includes(key)}
+                      >
+                        {preset.label}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
           )}
         />
-        {errors.locations && (
+        {errors.locationKeys && (
           <p className="text-xs text-destructive">
-            {errors.locations.message}
+            {errors.locationKeys.message}
           </p>
         )}
       </div>

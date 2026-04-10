@@ -47,6 +47,7 @@ class Publication(Base):
     status: Mapped[str] = mapped_column(default="queued")
     budget_daily_cents: Mapped[int]
     published_at: Mapped[datetime | None] = mapped_column(default=None)
+    resolved_geo_locations: Mapped[dict | None] = mapped_column(JSON, default=None)
     error_message: Mapped[str | None] = mapped_column(default=None)
     error_code: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=text("NOW()"))

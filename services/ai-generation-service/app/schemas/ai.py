@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, field_validator
 
 
@@ -22,12 +24,24 @@ class GenerateProposalsRequest(BaseModel):
         return v.strip()
 
 
+class LocationCountry(BaseModel):
+    type: Literal["country"] = "country"
+    country_code: str
+
+
+class LocationCity(BaseModel):
+    type: Literal["city"] = "city"
+    name: str
+    region: str | None = None
+    country_code: str
+
+
 class TargetAudienceResponse(BaseModel):
     age_min: int
     age_max: int
     genders: list[str]
     interests: list[str]
-    locations: list[str]
+    locations: list[LocationCountry | LocationCity | str]  # str for backward compat
 
 
 class ProposalResponse(BaseModel):

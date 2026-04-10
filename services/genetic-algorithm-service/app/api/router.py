@@ -1,7 +1,7 @@
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,12 +82,14 @@ async def update_config(
     status_code=status.HTTP_201_CREATED,
 )
 async def run_optimization(
+    request: Request,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Manual trigger for optimization cycle."""
     user_id = current_user["user_id"]
-    token = ""  # Token would come from request header in real use
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
     orchestrator = OptimizationOrchestrator(db)
     run = await orchestrator.run_optimization(user_id, token=token)
     return run

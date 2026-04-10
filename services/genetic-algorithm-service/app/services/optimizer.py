@@ -45,7 +45,7 @@ class OptimizationOrchestrator:
 
         # Step 2: Fetch and build evaluations
         evaluations = await self.evaluation_service.build_evaluations(
-            user_id, token
+            user_id, token, config=config
         )
 
         if not evaluations:
@@ -101,6 +101,7 @@ class OptimizationOrchestrator:
                     "tier": kd.tier,
                     "reason": kd.reason,
                     "action": kd.action,
+                    "budget_daily_cents": kd.budget_daily_cents,
                     "executed": success,
                 }
             )
@@ -162,28 +163,57 @@ class OptimizationOrchestrator:
                     token=token,
                 )
 
-                duplicated_records.append(
-                    {
-                        "parent_id": str(dd.campaign_id),
-                        "new_campaign_id": str(new_campaign_id)
-                        if new_campaign_id
-                        else None,
-                        "mutation_field": mutation_param,
-                        "copy_index": i + 1,
-                    }
-                )
+                if new_campaign_id is not None:
+                    duplicated_records.append(
+                        {
+                            "parent_id": str(dd.campaign_id),
+                            "new_campaign_id": str(new_campaign_id),
+                            "mutation_field": mutation_param,
+                            "copy_index": i + 1,
+                            "parent_budget_daily_cents": dd.parent_budget_daily_cents,
+                        }
+                    )
+                else:
+                    logger.warning(
+                        "duplication_failed_not_recorded",
+                        parent_id=str(dd.campaign_id),
+                        mutation_field=mutation_param,
+                    )
 
         # Step 10: Store optimization run
         fitness_dict = {}
         for fr in fitness_results:
             fitness_dict[str(fr.campaign_id)] = {
-                "classification": fr.classification.value,
-                "final_score": fr.final_score,
-                "weighted_score": fr.weighted_score,
-                "confidence_factor": fr.confidence_factor,
+                "classification": fr.classification.value if hasattr(fr.classification, 'value') else fr.classification,
+                "final_score": round(fr.final_score, 4),
                 "raw_scores": fr.raw_scores,
                 "normalized_scores": fr.normalized_scores,
+                "weighted_score": round(fr.weighted_score, 4),
+                "confidence_factor": round(fr.confidence_factor, 4),
             }
+
+        # Include immature campaigns so the frontend can display them
+        for ev in evaluations:
+            campaign_key = str(ev.campaign_id)
+            if campaign_key not in fitness_dict:
+                classification = self.evaluation_service.classify_campaign(ev, config)
+                fitness_dict[campaign_key] = {
+                    "classification": classification.value if hasattr(classification, 'value') else classification,
+                    "final_score": 0.0,
+                    "raw_scores": {
+                        "impressions": ev.total_impressions,
+                        "clicks": ev.total_clicks,
+                        "spend_cents": ev.total_spend_cents,
+                        "conversions": ev.total_conversions,
+                        "ctr": ev.ctr,
+                        "cpc": ev.cpc_cents,
+                        "roas": ev.roas,
+                        "cost_per_conversion": ev.cost_per_conversion_cents,
+                    },
+                    "normalized_scores": {},
+                    "weighted_score": 0.0,
+                    "confidence_factor": 0.0,
+                }
 
         run = await self._store_run(
             user_id=user_id,
@@ -283,19 +313,40 @@ class OptimizationOrchestrator:
                         headers={"Authorization": f"Bearer {token}"},
                     )
                     resp.raise_for_status()
-                else:
-                    # reduce_budget_20 / reduce_budget_30 → pause for MVP
-                    logger.info(
-                        "budget_reduction_requested_mvp_pause",
-                        campaign_id=str(kd.campaign_id),
-                        action=kd.action,
-                    )
-                    resp = await client.post(
-                        f"{settings.PUBLISHING_SERVICE_URL}"
-                        f"/api/v1/publish/publications/{kd.publication_id}/pause",
-                        headers={"Authorization": f"Bearer {token}"},
-                    )
-                    resp.raise_for_status()
+                elif kd.action in ("reduce_budget_20", "reduce_budget_30"):
+                    reduction = 0.20 if kd.action == "reduce_budget_20" else 0.30
+                    new_budget = int(kd.budget_daily_cents * (1 - reduction))
+                    new_budget = max(new_budget, 100)  # minimum $1/day
+
+                    try:
+                        resp = await client.patch(
+                            f"{settings.PUBLISHING_SERVICE_URL}"
+                            f"/api/v1/publish/publications/{kd.publication_id}",
+                            json={"budget_daily_cents": new_budget},
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                        resp.raise_for_status()
+                        logger.info(
+                            "budget_reduced",
+                            campaign_id=str(kd.campaign_id),
+                            old_budget=kd.budget_daily_cents,
+                            new_budget=new_budget,
+                            action=kd.action,
+                        )
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 404:
+                            logger.warning(
+                                "budget_update_fallback_pause",
+                                campaign_id=str(kd.campaign_id),
+                            )
+                            resp = await client.post(
+                                f"{settings.PUBLISHING_SERVICE_URL}"
+                                f"/api/v1/publish/publications/{kd.publication_id}/pause",
+                                headers={"Authorization": f"Bearer {token}"},
+                            )
+                            resp.raise_for_status()
+                        else:
+                            raise
 
             logger.info(
                 "kill_executed",

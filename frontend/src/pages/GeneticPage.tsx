@@ -1,369 +1,219 @@
-import { useMemo } from "react"
-import { useQuery, useMutation } from "@tanstack/react-query"
-import { queryClient } from "@/lib/queryClient"
-import api from "@/lib/api"
-import { ENDPOINTS } from "@/lib/endpoints"
-import { toast } from "sonner"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { z } from "zod"
-import type { GeneticConfig, OptimizationRun, PaginatedResponse } from "@/types"
-import {
-  Play,
-  Settings,
-  History,
-  Loader2,
-} from "lucide-react"
+import { useMemo, useState } from "react"
+import { Link } from "react-router-dom"
+import { Dna, Loader2, AlertCircle } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
-
-const configSchema = z.object({
-  min_impressions_to_evaluate: z.coerce.number().min(0),
-  min_days_active: z.coerce.number().min(0),
-  fitness_weights_ctr: z.coerce.number().min(0).max(1),
-  fitness_weights_roas: z.coerce.number().min(0).max(1),
-  fitness_weights_cpc: z.coerce.number().min(0).max(1),
-  mutation_rate: z.coerce.number().min(0).max(1),
-  max_active_campaigns: z.coerce.number().min(1),
-})
-
-type ConfigFormValues = z.infer<typeof configSchema>
+  useOptimizationRuns,
+  useGeneticConfig,
+  useMetricsSummaryGenetic,
+  useTopPerformersGenetic,
+  useTriggerOptimization,
+  useUpdateGeneticConfig,
+} from "@/hooks/useGeneticAlgorithm"
+import { useCampaignNames } from "@/hooks/useCampaignNames"
+import ImpactSummaryTab from "@/components/genetic/ImpactSummaryTab"
+import OptimizationHistoryTab from "@/components/genetic/OptimizationHistoryTab"
+import CampaignHealthTab from "@/components/genetic/CampaignHealthTab"
+import ConfigurationTab from "@/components/genetic/ConfigurationTab"
 
 export default function GeneticPage() {
-  const { data: config, isLoading: configLoading } = useQuery<GeneticConfig>({
-    queryKey: ["genetic-config"],
-    queryFn: () => api.get(ENDPOINTS.optimize.config).then((r) => r.data),
-  })
+  const [activeTab, setActiveTab] = useState("impact")
 
-  const { data: runs = [], isLoading: runsLoading } = useQuery<OptimizationRun[]>({
-    queryKey: ["genetic-history"],
-    queryFn: () =>
-      api.get(ENDPOINTS.optimize.history).then((r) => {
-        const body = r.data
-        if (Array.isArray(body)) return body
-        return (body as PaginatedResponse<OptimizationRun>).items ?? []
-      }),
-  })
+  // ---- Data fetching at page level ----
+  const {
+    data: runs = [],
+    isLoading: runsLoading,
+    error: runsError,
+    refetch: refetchRuns,
+  } = useOptimizationRuns(1, 20)
 
   const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<ConfigFormValues>({
-    resolver: zodResolver(configSchema),
-    values: config
-      ? {
-          min_impressions_to_evaluate: config.min_impressions_to_evaluate,
-          min_days_active: config.min_days_active,
-          fitness_weights_ctr: config.fitness_weights.ctr,
-          fitness_weights_roas: config.fitness_weights.roas,
-          fitness_weights_cpc: config.fitness_weights.cpc,
-          mutation_rate: config.mutation_rate,
-          max_active_campaigns: config.max_active_campaigns,
-        }
-      : {
-          min_impressions_to_evaluate: 100,
-          min_days_active: 3,
-          fitness_weights_ctr: 0.4,
-          fitness_weights_roas: 0.4,
-          fitness_weights_cpc: 0.2,
-          mutation_rate: 0.1,
-          max_active_campaigns: 10,
-        },
-  })
+    data: config,
+    isLoading: configLoading,
+    error: configError,
+  } = useGeneticConfig()
 
-  const configureMutation = useMutation({
-    mutationFn: (values: ConfigFormValues) =>
-      api.put(ENDPOINTS.optimize.config, {
-        min_impressions_to_evaluate: values.min_impressions_to_evaluate,
-        min_days_active: values.min_days_active,
-        fitness_weights: {
-          ctr: values.fitness_weights_ctr,
-          roas: values.fitness_weights_roas,
-          cpc: values.fitness_weights_cpc,
-        },
-        mutation_rate: values.mutation_rate,
-        max_active_campaigns: values.max_active_campaigns,
-      }),
-    onSuccess: () => {
-      toast.success("Configuración guardada")
-      queryClient.invalidateQueries({ queryKey: ["genetic-config"] })
-    },
-    onError: () => toast.error("Error al guardar configuración"),
-  })
+  const {
+    data: metrics,
+    isLoading: metricsLoading,
+  } = useMetricsSummaryGenetic()
 
-  const evaluateMutation = useMutation({
-    mutationFn: () => api.post(ENDPOINTS.optimize.run),
-    onSuccess: () => {
-      toast.success("Evaluación completada")
-      queryClient.invalidateQueries({ queryKey: ["genetic-history"] })
-    },
-    onError: () => toast.error("Error al ejecutar evaluación"),
-  })
+  const {
+    data: topPerformers = [],
+    isLoading: performersLoading,
+  } = useTopPerformersGenetic()
 
-  const onSubmitConfig = (values: ConfigFormValues) => {
-    configureMutation.mutate(values)
-  }
+  const triggerMutation = useTriggerOptimization()
+  const updateConfigMutation = useUpdateGeneticConfig()
 
-  const isLoading = configLoading || runsLoading
+  // ---- Extract all campaign IDs for name resolution ----
+  const allCampaignIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const run of runs) {
+      for (const [id] of Object.entries(run.fitness_scores ?? {})) {
+        ids.add(id)
+      }
+      for (const k of run.campaigns_killed ?? []) {
+        ids.add(k.campaign_id)
+      }
+      for (const d of run.campaigns_duplicated ?? []) {
+        ids.add(d.parent_id)
+        ids.add(d.new_campaign_id)
+      }
+    }
+    // Also add top performers
+    for (const p of topPerformers) {
+      ids.add(p.campaign_id)
+    }
+    return [...ids]
+  }, [runs, topPerformers])
+
+  const { getName, isLoading: namesLoading } = useCampaignNames(allCampaignIds)
+
+  // ---- Loading state ----
+  const isLoading = runsLoading || configLoading
 
   if (isLoading) {
     return (
       <div className="space-y-6 p-6">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-64" />
-        <Skeleton className="h-64" />
+        <Skeleton className="h-8 w-72" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-32" />
+          ))}
+        </div>
+        <Skeleton className="h-[350px]" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Skeleton className="h-48" />
+          <Skeleton className="h-48" />
+        </div>
       </div>
     )
   }
 
-  return (
-    <div className="space-y-8 p-6">
-      {/* Section 1: Configuration */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-3">
-          <Settings className="h-6 w-6 text-primary" />
+  // ---- Error state ----
+  if (runsError || configError) {
+    return (
+      <div className="p-6">
+        <div className="rounded-lg border border-red-200 bg-red-50 p-6 flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 shrink-0" />
           <div>
-            <h1 className="text-2xl font-bold">Algoritmo Genético</h1>
-            <p className="text-muted-foreground">Configuración y monitoreo</p>
+            <h3 className="font-semibold text-red-800">Error cargando datos</h3>
+            <p className="text-sm text-red-700 mt-1">
+              {(runsError as Error)?.message ||
+                (configError as Error)?.message ||
+                "Intenta de nuevo en unos minutos"}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => refetchRuns()}
+            >
+              Reintentar
+            </Button>
           </div>
         </div>
       </div>
+    )
+  }
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Configuración</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit(onSubmitConfig)} className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="min_impressions_to_evaluate">
-                Impresiones mínimas para evaluar
-              </Label>
-              <Input
-                id="min_impressions_to_evaluate"
-                type="number"
-                {...register("min_impressions_to_evaluate")}
-                className="max-w-xs"
-              />
-              <p className="text-sm text-muted-foreground">
-                Campañas con menos impresiones no serán evaluadas
-              </p>
-              {errors.min_impressions_to_evaluate && (
-                <p className="text-sm text-red-500">
-                  {errors.min_impressions_to_evaluate.message}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="min_days_active">Días mínimos activa</Label>
-              <Input
-                id="min_days_active"
-                type="number"
-                {...register("min_days_active")}
-                className="max-w-xs"
-              />
-              {errors.min_days_active && (
-                <p className="text-sm text-red-500">
-                  {errors.min_days_active.message}
-                </p>
-              )}
-            </div>
-
-            <Separator />
-
-            <div className="space-y-4">
-              <Label>Pesos de fitness</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="fitness_weights_ctr" className="text-xs">
-                    CTR
-                  </Label>
-                  <Input
-                    id="fitness_weights_ctr"
-                    type="number"
-                    step="0.01"
-                    {...register("fitness_weights_ctr")}
-                  />
-                  {errors.fitness_weights_ctr && (
-                    <p className="text-sm text-red-500">
-                      {errors.fitness_weights_ctr.message}
-                    </p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="fitness_weights_roas" className="text-xs">
-                    ROAS
-                  </Label>
-                  <Input
-                    id="fitness_weights_roas"
-                    type="number"
-                    step="0.01"
-                    {...register("fitness_weights_roas")}
-                  />
-                  {errors.fitness_weights_roas && (
-                    <p className="text-sm text-red-500">
-                      {errors.fitness_weights_roas.message}
-                    </p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="fitness_weights_cpc" className="text-xs">
-                    CPC
-                  </Label>
-                  <Input
-                    id="fitness_weights_cpc"
-                    type="number"
-                    step="0.01"
-                    {...register("fitness_weights_cpc")}
-                  />
-                  {errors.fitness_weights_cpc && (
-                    <p className="text-sm text-red-500">
-                      {errors.fitness_weights_cpc.message}
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="mutation_rate">Tasa de mutación</Label>
-              <Input
-                id="mutation_rate"
-                type="number"
-                step="0.01"
-                {...register("mutation_rate")}
-                className="max-w-xs"
-              />
-              {errors.mutation_rate && (
-                <p className="text-sm text-red-500">
-                  {errors.mutation_rate.message}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="max_active_campaigns">
-                Máximo de campañas activas
-              </Label>
-              <Input
-                id="max_active_campaigns"
-                type="number"
-                {...register("max_active_campaigns")}
-                className="max-w-xs"
-              />
-              {errors.max_active_campaigns && (
-                <p className="text-sm text-red-500">
-                  {errors.max_active_campaigns.message}
-                </p>
-              )}
-            </div>
-
-            <div className="flex gap-3">
-              <Button type="submit" disabled={configureMutation.isPending}>
-                {configureMutation.isPending && (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                )}
-                Guardar configuración
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => evaluateMutation.mutate()}
-                disabled={evaluateMutation.isPending}
-              >
-                {evaluateMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4 mr-2" />
-                )}
-                Evaluar ahora
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      {/* Section 2: Optimization History */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <History className="h-5 w-5 text-primary" />
-            <CardTitle className="text-base">
-              Historial de optimizaciones
-            </CardTitle>
+  // ---- Empty state (no runs at all) ----
+  if (runs.length === 0) {
+    return (
+      <div className="p-6">
+        <div className="flex flex-col items-center justify-center py-20 text-center gap-4 max-w-md mx-auto">
+          <Dna className="h-16 w-16 text-muted-foreground/50" />
+          <h2 className="text-xl font-semibold">
+            Tu optimizador automático está listo
+          </h2>
+          <p className="text-muted-foreground">
+            El sistema evaluará tus campañas automáticamente cada 24 horas para
+            maximizar tu retorno.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Para empezar necesitas al menos 1 campaña publicada con 3+ días
+            activa.
+          </p>
+          <Link to="/campaigns">
+            <Button variant="outline">Ir a mis campañas &rarr;</Button>
+          </Link>
+          <div className="pt-2">
+            <p className="text-sm text-muted-foreground mb-2">
+              ¿Quieres ejecutar la primera optimización ahora?
+            </p>
+            <Button
+              onClick={() => triggerMutation.mutate()}
+              disabled={triggerMutation.isPending}
+            >
+              {triggerMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : null}
+              Ejecutar primera optimización
+            </Button>
           </div>
-        </CardHeader>
-        <CardContent>
-          {runs.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left">
-                    <th className="pb-3 font-medium text-muted-foreground">
-                      Fecha
-                    </th>
-                    <th className="pb-3 font-medium text-muted-foreground">
-                      Generación
-                    </th>
-                    <th className="pb-3 font-medium text-muted-foreground">
-                      Evaluadas
-                    </th>
-                    <th className="pb-3 font-medium text-muted-foreground">
-                      Duplicadas
-                    </th>
-                    <th className="pb-3 font-medium text-muted-foreground">
-                      Eliminadas
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {runs.map((run) => (
-                    <tr key={run.id}>
-                      <td className="py-3 whitespace-nowrap">
-                        {new Date(run.ran_at).toLocaleDateString("es-ES", {
-                          day: "2-digit",
-                          month: "short",
-                          year: "numeric",
-                        })}
-                      </td>
-                      <td className="py-3 font-mono">
-                        #{run.generation_number}
-                      </td>
-                      <td className="py-3">{run.campaigns_evaluated}</td>
-                      <td className="py-3">
-                        {run.campaigns_duplicated.length}
-                      </td>
-                      <td className="py-3">{run.campaigns_killed.length}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center gap-3">
-              <History className="h-12 w-12 text-muted-foreground/50" />
-              <p className="text-muted-foreground">
-                No hay optimizaciones registradas aún.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Las optimizaciones aparecerán aquí cuando el algoritmo genético
-                evalúe tus campañas.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+    )
+  }
+
+  // ---- Main content with tabs ----
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="text-2xl font-bold">Optimizador de Campañas</h1>
+        <p className="text-muted-foreground">
+          Tu sistema de inteligencia artificial trabajando 24/7 para maximizar tus resultados
+        </p>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="w-full justify-start overflow-x-auto">
+          <TabsTrigger value="impact">Resumen de Impacto</TabsTrigger>
+          <TabsTrigger value="history">Historial</TabsTrigger>
+          <TabsTrigger value="campaigns">Mis Campañas</TabsTrigger>
+          <TabsTrigger value="config">Configuración</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="impact" className="mt-6">
+          <ImpactSummaryTab
+            runs={runs}
+            config={config}
+            metrics={metrics}
+            topPerformers={topPerformers}
+            getName={getName}
+            onSwitchToHistory={() => setActiveTab("history")}
+          />
+        </TabsContent>
+
+        <TabsContent value="history" className="mt-6">
+          <OptimizationHistoryTab
+            runs={runs}
+            config={config}
+            getName={getName}
+            onTriggerOptimization={() => triggerMutation.mutate()}
+            isOptimizing={triggerMutation.isPending}
+          />
+        </TabsContent>
+
+        <TabsContent value="campaigns" className="mt-6">
+          <CampaignHealthTab
+            runs={runs}
+            config={config}
+            getName={getName}
+          />
+        </TabsContent>
+
+        <TabsContent value="config" className="mt-6">
+          <ConfigurationTab
+            config={config}
+            onSave={(data) => updateConfigMutation.mutate(data)}
+            isSaving={updateConfigMutation.isPending}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

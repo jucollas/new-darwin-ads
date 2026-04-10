@@ -10,5 +10,7 @@ COPY services/analytics-service/ /app/
 
 RUN chmod +x /app/entrypoint.sh
 
+ENV PYTHONPATH=/app
+
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005"]

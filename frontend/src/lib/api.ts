@@ -31,8 +31,11 @@ export default api
 import { ENDPOINTS } from "./endpoints"
 import type {
   AdAccount,
+  GeneticConfig,
+  GeneticConfigUpdate,
   MetricListResponse,
   MetricsSummary,
+  OptimizationRun,
   PaginatedResponse,
   Publication,
   PublishRequest,
@@ -96,3 +99,26 @@ export const getUnderperformers = () =>
 
 export const triggerMetricsCollection = (lookbackDays: number = 7) =>
   api.post(ENDPOINTS.metrics.collect, { lookback_days: lookbackDays })
+
+// ========================
+// GENETIC ALGORITHM API
+// ========================
+
+export const geneticApi = {
+  listRuns: (page = 1, pageSize = 10) =>
+    api.get<PaginatedResponse<OptimizationRun>>(ENDPOINTS.optimize.history, {
+      params: { page, page_size: pageSize },
+    }),
+
+  getRunDetail: (runId: string) =>
+    api.get<OptimizationRun>(ENDPOINTS.optimize.detail(runId)),
+
+  triggerOptimization: () =>
+    api.post<OptimizationRun>(ENDPOINTS.optimize.run),
+
+  getConfig: () =>
+    api.get<GeneticConfig>(ENDPOINTS.optimize.config),
+
+  updateConfig: (data: GeneticConfigUpdate) =>
+    api.put<GeneticConfig>(ENDPOINTS.optimize.config, data),
+}

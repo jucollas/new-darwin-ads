@@ -276,7 +276,7 @@ class CampaignService:
         campaign = await self.get_by_id(campaign_id, user_id)
         if not campaign:
             return None
-        if campaign.status not in ("image_ready",):
+        if campaign.status not in ("image_ready", "failed", "publishing"):
             return None
         if not campaign.selected_proposal_id:
             return None

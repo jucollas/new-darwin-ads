@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ProposalEditForm } from "@/components/ProposalEditForm"
+import { formatLocations } from "@/lib/formatters"
 import type { Proposal, Campaign } from "@/types"
 
 interface ProposalDetailModalProps {
@@ -282,7 +283,7 @@ export function ProposalDetailModal({
                       .join(", ")}
                   </p>
                   <p>Intereses: {audience.interests.join(", ")}</p>
-                  <p>Ubicaciones: {audience.locations.join(", ")}</p>
+                  <p>Ubicaciones: {formatLocations(audience.locations)}</p>
                 </div>
               </div>
 

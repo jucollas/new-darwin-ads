@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timedelta
 
@@ -16,6 +17,7 @@ from app.schemas.publishing import (
     AdAccountListResponse,
     AdAccountResponse,
     AdAccountVerifyResponse,
+    PublicationBudgetUpdate,
     PublicationListResponse,
     PublicationResponse,
     PublicationStatusResponse,
@@ -288,6 +290,52 @@ async def pause_publication(
     return publication
 
 
+@router.patch("/publications/{publication_id}", response_model=PublicationResponse)
+async def update_publication_budget(
+    publication_id: str,
+    data: PublicationBudgetUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update publication budget. Also updates the AdSet budget in Meta."""
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.orm import selectinload
+    from app.models.publishing import Publication, AdAccount as AdAccountModel
+    from app.services.meta_ads_service import MetaAdsService
+    from app.services.token_encryption import decrypt_token
+
+    pub_uuid = _parse_uuid(publication_id)
+    result = await db.execute(
+        sa_select(Publication)
+        .join(Publication.ad_account)
+        .where(
+            Publication.id == pub_uuid,
+            AdAccountModel.user_id == current_user["user_id"],
+        )
+        .options(selectinload(Publication.ad_account))
+    )
+    publication = result.scalar_one_or_none()
+    if not publication:
+        raise HTTPException(status_code=404, detail="Publication not found")
+
+    # Update budget in Meta if adset exists
+    if publication.meta_adset_id and publication.ad_account:
+        access_token = decrypt_token(publication.ad_account.access_token_encrypted)
+        meta_service = MetaAdsService(access_token)
+        try:
+            await asyncio.to_thread(
+                meta_service.update_adset_budget,
+                publication.meta_adset_id,
+                data.budget_daily_cents,
+            )
+        except MetaApiError as exc:
+            raise HTTPException(status_code=502, detail=f"Meta API error: {exc.message}")
+
+    publication.budget_daily_cents = data.budget_daily_cents
+    await db.flush()
+    return publication
+
+
 @router.post("/publications/{publication_id}/resume", response_model=PublicationResponse)
 async def resume_publication(
     publication_id: str,
@@ -378,6 +426,8 @@ async def update_publication_status_internal(
                      "meta_ad_id", "meta_image_hash"):
             if key in meta_ids:
                 values[key] = meta_ids[key]
+    if "resolved_geo_locations" in data:
+        values["resolved_geo_locations"] = data["resolved_geo_locations"]
     if new_status == "active":
         values["published_at"] = datetime.utcnow()
     if "error_message" in data:

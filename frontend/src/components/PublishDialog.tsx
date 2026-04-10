@@ -27,7 +27,7 @@ const publishSchema = z.object({
   ad_account_id: z.string().min(1, "Selecciona una cuenta"),
   budget: z
     .number({ invalid_type_error: "Ingresa un monto válido" })
-    .min(10000, "El presupuesto mínimo es $10,000 COP"),
+    .min(1, "El presupuesto mínimo es $1 USD"),
 })
 
 type PublishFormValues = z.infer<typeof publishSchema>
@@ -142,11 +142,11 @@ export function PublishDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="budget">Presupuesto diario (COP)</Label>
+              <Label htmlFor="budget">Presupuesto diario (USD)</Label>
               <Input
                 id="budget"
                 type="number"
-                placeholder="10000"
+                placeholder="5"
                 {...register("budget", { valueAsNumber: true })}
               />
               {errors.budget && (

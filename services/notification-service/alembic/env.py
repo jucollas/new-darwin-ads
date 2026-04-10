@@ -12,7 +12,10 @@ database_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://adgen:changeme_in
 sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
 config.set_main_option("sqlalchemy.url", sync_url)
 
-target_metadata = None
+from app.models.notification import Notification  # noqa: F401
+from shared.database.session import Base
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

@@ -32,7 +32,7 @@ class TestPublishAdTask:
         mock_service = MagicMock()
         mock_service.upload_image.return_value = "hash_123"
         mock_service.create_campaign.return_value = "camp_123"
-        mock_service.create_adset.return_value = "adset_123"
+        mock_service.create_adset.return_value = ("adset_123", {"countries": ["CO"]})
         mock_service.create_adcreative.return_value = "creative_123"
         mock_service.create_ad.return_value = "ad_123"
         mock_service_cls.return_value = mock_service
@@ -61,14 +61,18 @@ class TestPublishAdTask:
         mock_update_pub.assert_any_call(pub_id, "publishing")
         # Verify incremental saves happened (Bug #2)
         mock_update_pub.assert_any_call(pub_id, "publishing", meta_ids={"meta_image_hash": "hash_123"})
-        # Verify final active call includes all IDs
-        mock_update_pub.assert_any_call(pub_id, "active", meta_ids={
-            "meta_campaign_id": "camp_123",
-            "meta_adset_id": "adset_123",
-            "meta_adcreative_id": "creative_123",
-            "meta_ad_id": "ad_123",
-            "meta_image_hash": "hash_123",
-        })
+        # Verify final active call includes all IDs and resolved locations
+        mock_update_pub.assert_any_call(
+            pub_id, "active",
+            meta_ids={
+                "meta_campaign_id": "camp_123",
+                "meta_adset_id": "adset_123",
+                "meta_adcreative_id": "creative_123",
+                "meta_ad_id": "ad_123",
+                "meta_image_hash": "hash_123",
+            },
+            resolved_geo_locations={"countries": ["CO"]},
+        )
         mock_update_camp.assert_called_with("00000000-0000-0000-0000-000000000003", "published")
 
     @patch("app.tasks.celery_tasks.celery_app")

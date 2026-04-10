@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 
@@ -15,6 +16,7 @@ from facebook_business.adobjects.targetingsearch import TargetingSearch
 from facebook_business.exceptions import FacebookRequestError
 
 from app.config import settings
+from app.services.meta_location_resolver import MetaLocationResolver
 from app.services.meta_exceptions import (
     MetaApiError,
     MetaInvalidParameterError,
@@ -150,6 +152,9 @@ class MetaAdsService:
                 else:
                     logger.warning("meta_interest_not_found", interest=name)
             except FacebookRequestError as exc:
+                error_code = exc.api_error_code()
+                if error_code in (190, 17, 613):
+                    _handle_meta_error(exc)
                 logger.warning("meta_interest_search_failed", interest=name, error=str(exc))
         return resolved
 
@@ -189,15 +194,24 @@ class MetaAdsService:
         optimization_goal: str | None = None,
         billing_event: str | None = None,
         bid_strategy: str | None = None,
-    ) -> str:
-        """Create a Meta Ad Set with WhatsApp targeting. Returns meta_adset_id."""
+    ) -> tuple[str, dict]:
+        """Create a Meta Ad Set with WhatsApp targeting. Returns (meta_adset_id, resolved_geo_locations)."""
         optimization_goal = optimization_goal or settings.META_DEFAULT_OPTIMIZATION_GOAL
         billing_event = billing_event or settings.META_DEFAULT_BILLING_EVENT
         bid_strategy = bid_strategy or settings.META_DEFAULT_BID_STRATEGY
 
         # Build targeting spec
-        genders = [GENDER_MAP[g] for g in target_audience.get("genders", []) if g in GENDER_MAP]
-        locations = target_audience.get("locations", ["CO"])
+        # "all" in the genders list means target everyone — omit field entirely
+        raw_genders = target_audience.get("genders", [])
+        if "all" in raw_genders:
+            genders = []
+        else:
+            genders = [GENDER_MAP[g] for g in raw_genders if g in GENDER_MAP]
+
+        # Resolve locations (city-aware): supports new object format and old string format
+        resolver = MetaLocationResolver(self.api)
+        raw_locations = target_audience.get("locations", [{"type": "country", "country_code": "CO"}])
+        geo_locations, resolved_for_storage = resolver.resolve(raw_locations)
 
         age_min = target_audience.get("age_min", 18)
         age_max = target_audience.get("age_max", 65)
@@ -212,7 +226,7 @@ class MetaAdsService:
         targeting = {
             "age_min": age_min,
             "age_max": age_max,
-            "geo_locations": {"countries": locations},
+            "geo_locations": geo_locations,
             "targeting_automation": {
                 "advantage_audience": 0,  # manual targeting — AdGen AI controls audience optimization
             },
@@ -226,6 +240,29 @@ class MetaAdsService:
             resolved_interests = self.resolve_interest_ids(interest_names)
             if resolved_interests:
                 targeting["flexible_spec"] = [{"interests": resolved_interests}]
+
+        # Safety: widen narrow audiences to avoid Meta error 100/2446395.
+        # Single city + gender + narrow age range + interests can be too small.
+        is_city_targeting = "cities" in targeting.get("geo_locations", {})
+        has_interests = "flexible_spec" in targeting
+        age_range = targeting.get("age_max", 65) - targeting.get("age_min", 18)
+        has_narrow_age = age_range <= 15
+
+        if is_city_targeting and has_interests and has_narrow_age:
+            logger.info(
+                "meta_audience_widening",
+                reason="city + interests + narrow age range",
+                original_age_min=targeting["age_min"],
+                original_age_max=targeting["age_max"],
+            )
+            targeting["age_min"] = max(18, targeting["age_min"] - 5)
+            targeting["age_max"] = min(65, targeting["age_max"] + 5)
+
+        logger.info(
+            "meta_adset_targeting_spec",
+            targeting=json.dumps(targeting, default=str),
+            daily_budget_cents=daily_budget_cents,
+        )
 
         try:
             account = self._get_account(ad_account_id)
@@ -246,7 +283,7 @@ class MetaAdsService:
             })
             adset_id = adset["id"]
             logger.info("meta_adset_created", adset_id=adset_id)
-            return adset_id
+            return adset_id, resolved_for_storage
         except FacebookRequestError as exc:
             _handle_meta_error(exc)
 
@@ -363,7 +400,7 @@ class MetaAdsService:
             created_ids["meta_campaign_id"] = meta_campaign_id
 
             # 3. Create Ad Set (PAUSED)
-            meta_adset_id = self.create_adset(
+            meta_adset_id, resolved_geo = self.create_adset(
                 ad_account_id=ad_account_id,
                 campaign_id=meta_campaign_id,
                 name=f"{name} - Ad Set",
@@ -373,6 +410,7 @@ class MetaAdsService:
                 whatsapp_phone_number=whatsapp_phone_number,
             )
             created_ids["meta_adset_id"] = meta_adset_id
+            created_ids["resolved_geo_locations"] = resolved_geo
 
             # 4. Create Ad Creative
             meta_adcreative_id = self.create_adcreative(
@@ -438,6 +476,17 @@ class MetaAdsService:
                 "status": ad.get("status"),
                 "effective_status": ad.get("effective_status"),
             }
+        except FacebookRequestError as exc:
+            _handle_meta_error(exc)
+
+    def update_adset_budget(self, adset_id: str, daily_budget_cents: int) -> None:
+        """Update an AdSet's daily budget in Meta."""
+        try:
+            adset = AdSet(adset_id, api=self.api)
+            adset.api_update(params={
+                AdSet.Field.daily_budget: str(daily_budget_cents),
+            })
+            logger.info("meta_adset_budget_updated", adset_id=adset_id, daily_budget_cents=daily_budget_cents)
         except FacebookRequestError as exc:
             _handle_meta_error(exc)
 

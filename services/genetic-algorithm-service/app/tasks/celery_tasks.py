@@ -29,12 +29,15 @@ async def _run_optimization_async(user_id: str) -> dict:
     """Async wrapper for the optimization cycle."""
     from app.models.genetic import GeneticConfig  # noqa: F811
     from app.services.optimizer import OptimizationOrchestrator
+    from app.services.token_generator import generate_service_token
+
+    token = generate_service_token(user_id)
 
     session_factory = _get_async_session()
     async with session_factory() as session:
         try:
             orchestrator = OptimizationOrchestrator(session)
-            run = await orchestrator.run_optimization(user_id)
+            run = await orchestrator.run_optimization(user_id, token=token)
             await session.commit()
             return {
                 "run_id": str(run.id),

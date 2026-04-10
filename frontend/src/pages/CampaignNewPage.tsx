@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import api from "@/lib/api"
+import { formatLocations } from "@/lib/formatters"
 import { ENDPOINTS } from "@/lib/endpoints"
 import { queryClient } from "@/lib/queryClient"
 import { useCampaignPolling } from "@/hooks/useCampaignPolling"
@@ -180,7 +181,7 @@ export default function CampaignNewPage() {
     const parts: string[] = []
     if (ta.age_min || ta.age_max) parts.push(`${ta.age_min}-${ta.age_max} años`)
     if (ta.genders.length) parts.push(ta.genders.join(", "))
-    if (ta.locations.length) parts.push(ta.locations.join(", "))
+    if (ta.locations.length) parts.push(formatLocations(ta.locations))
     if (ta.interests.length) parts.push(ta.interests.join(", "))
     return parts.join(" · ") || "Sin definir"
   }

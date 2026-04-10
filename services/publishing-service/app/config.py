@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
+    ENVIRONMENT: str = "development"
+
     # Meta Ads
+    META_ACCESS_TOKEN: str = ""
     META_APP_ID: str = ""
     META_APP_SECRET: str = ""
     META_API_VERSION: str = "v25.0"
@@ -32,7 +35,7 @@ class Settings(BaseSettings):
     WHATSAPP_DEFAULT_PHONE_NUMBER: str | None = None
 
     # Meta defaults
-    META_DEFAULT_CURRENCY: str = "COP"
+    META_DEFAULT_CURRENCY: str = "USD"
     META_DEFAULT_BID_STRATEGY: str = "LOWEST_COST_WITHOUT_CAP"
     META_DEFAULT_BILLING_EVENT: str = "IMPRESSIONS"
     META_DEFAULT_OPTIMIZATION_GOAL: str = "CONVERSATIONS"
